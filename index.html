@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="提示词工作台">
+<meta name="format-detection" content="telephone=no">
+<meta name="theme-color" content="#f2f2f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)">
+<meta name="description" content="提示词收藏、拼装与 AI 分析工作台 · 本地离线可用">
+<title>提示词工作台</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+</head>
+<body>
+
+<!-- ===== WebGL 液态玻璃背景（失败则隐藏，露出 .bg-fallback） ===== -->
+<canvas id="glbg" aria-hidden="true"></canvas>
+<div class="bg-fallback" aria-hidden="true"></div>
+<svg id="lg-defs" width="0" height="0" aria-hidden="true" style="position:absolute"></svg>
+
+<!-- ===== 应用外壳 ===== -->
+<div class="app-shell" id="appShell">
+
+  <!-- 顶栏：沉浸式状态栏 + 紧凑标题 + 玻璃按钮 -->
+  <header class="topbar" id="topbar">
+    <div class="topbar-inner">
+      <div class="compact-title" id="compactTitle">提示词库</div>
+      <div class="topbar-actions">
+        <button class="icon-btn glass" id="btnSearch" aria-label="搜索">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/></svg>
+        </button>
+        <button class="icon-btn glass" id="btnMore" aria-label="更多">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
+        </button>
+        <button class="icon-btn filled" id="btnAdd" aria-label="记录提示词">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+  <h1 class="big-title" id="bigTitle">提示词库</h1>
+
+  <!-- 搜索条：点击放大镜后从右侧展开 -->
+  <div class="searchbar" id="searchbar">
+    <svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.4-3.4"/></svg>
+    <input id="searchInput" type="search" placeholder="搜索标题、正文、标签" autocomplete="off" enterkeyhint="search">
+    <button class="cancel" id="btnCancelSearch">取消</button>
+  </div>
+
+  <!-- 四页横向分页 -->
+  <div class="pager" id="pager">
+
+    <!-- ========== 1. 提示词库 ========== -->
+    <section class="page" id="viewLibrary" data-tab="0">
+      <div class="stats" id="statsRow"></div>
+      <div class="series" id="catChips" style="margin-top:14px">
+        <div class="hscroll" id="mobileCatBar"></div>
+      </div>
+      <div class="hscroll" id="tagBar"></div>
+      <div class="toolbar" id="libToolbar">
+        <div class="hscroll" id="filterChips" style="flex:1">
+          <button class="chip on" data-filter="all" onclick="setFilter('all')">全部</button>
+          <button class="chip" data-filter="fav" onclick="setFilter('fav')">收藏</button>
+          <button class="chip" data-filter="tpl" onclick="setFilter('tpl')">模版</button>
+        </div>
+        <button class="chip sort-chip" id="sortBtn" aria-label="排序">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 12h7M4 17h4"/><path d="m17 10 3 3 3-3" transform="translate(-3 0)"/></svg>
+          <span id="sortLabel">最近更新</span>
+        </button>
+      </div>
+      <div class="grid" id="cardGrid"></div>
+      <div class="empty hidden" id="libraryEmpty">
+        <div class="big">
+          <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="4"/><path d="M7 9h10M7 13h6"/></svg>
+        </div>
+        <p>还没有收藏提示词<br>点右上角 ＋ 开始整理素材库</p>
+      </div>
+    </section>
+
+    <!-- ========== 2. 拼装器 ========== -->
+    <section class="page" id="viewBuilder" data-tab="1">
+      <div class="group" style="margin-top:2px">
+        <div class="group-head">
+          <h3>模块拼装</h3>
+          <span style="font-size:12px;color:var(--ink-3)">留空自动跳过</span>
+        </div>
+        <div class="group-body">
+          <div class="field"><label>主体 / 人物</label><input id="bSubject" placeholder="如：一位短发年轻女性"></div>
+          <div class="field"><label>风格 / 画风</label><input id="bStyle" placeholder="如：CCD 复古、胶片质感"></div>
+          <div class="field"><label>光影</label><input id="bLight" placeholder="如：窗边逆光、柔和侧光"></div>
+          <div class="field"><label>构图 / 视角</label><input id="bComp" placeholder="如：半身像、平视、浅景深"></div>
+          <div class="field"><label>质感 / 细节</label><input id="bTex" placeholder="如：皮肤纹理、发丝清晰"></div>
+          <div class="field"><label>氛围 / 情绪</label><input id="bMood" placeholder="如：清冷、安静、故事感"></div>
+          <div class="field"><label>镜头 / 参数补充</label><input id="bLens" placeholder="如：35mm、f/1.8、暖色调"></div>
+          <div class="field" style="margin-bottom:0"><label>负面提示词</label><textarea id="bNeg" rows="2" placeholder="如：模糊、畸变、多余手指、低画质"></textarea></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head"><h3>拼装结果</h3></div>
+        <div class="group-body builder-preview">
+          <textarea id="bResult" readonly placeholder="填写上方模块后，点「拼装」生成完整提示词。"></textarea>
+          <div class="builder-actions">
+            <button class="btn primary" onclick="assemble()">拼装</button>
+            <button class="btn" onclick="copyBuilder()">复制</button>
+            <button class="btn" onclick="saveBuilderToLib()">存入库</button>
+            <button class="btn ghost" onclick="clearBuilder()">清空</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 3. AI 工作台 ========== -->
+    <section class="page" id="viewWorkbench" data-tab="2">
+      <div class="group" style="margin-top:2px">
+        <div class="group-head">
+          <h3>学习对象</h3>
+          <span class="model-pill" id="wbModelPill" onclick="switchView('profile')"></span>
+        </div>
+        <div class="group-body">
+          <div class="field"><label>按分类选取</label><div class="pick-list" id="wbCatPick"></div></div>
+          <div class="field" style="margin-bottom:0"><label>或逐条勾选提示词</label><div class="pick-list" id="wbPromptPick"></div></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head"><div class="segmented" id="taskSeg" style="flex:1"></div></div>
+        <div class="group-body">
+          <div class="radio-row" id="taskRadios" style="display:none">
+            <label><input type="radio" name="taskType" value="summary" checked onchange="onTaskChange()"> 总结模版：提炼可复用结构与占位符</label>
+            <label><input type="radio" name="taskType" value="advice" onchange="onTaskChange()"> 写作建议：归纳写法规律与踩坑点</label>
+            <label><input type="radio" name="taskType" value="optimize" onchange="onTaskChange()"> 单条优化：润色并给出增强版本</label>
+            <label><input type="radio" name="taskType" value="review" onchange="onTaskChange()"> 质检打分：要素完整性评估与改进点</label>
+            <label><input type="radio" name="taskType" value="variants" onchange="onTaskChange()"> 扩写变体：生成多个不同角度版本</label>
+            <label><input type="radio" name="taskType" value="reverse" onchange="onTaskChange()"> 图片反推：由案例图反推提示词</label>
+            <label><input type="radio" name="taskType" value="free" onchange="onTaskChange()"> 自由问答：针对所选素材提问</label>
+          </div>
+          <div class="field" id="taskDesc" style="font-size:13px;color:var(--ink-3);margin:0 0 12px">提炼共性结构，给出带占位符的模版范例</div>
+          <div class="field hidden" id="varCountField">
+            <label>变体数量</label>
+            <select id="varCount"><option value="3">3 个</option><option value="5" selected>5 个</option><option value="8">8 个</option></select>
+          </div>
+          <div class="field hidden" id="reverseField">
+            <label>上传案例图（需模型支持视觉）</label>
+            <div class="upload-box" id="reverseBox" onclick="document.getElementById('reverseImg').click()">点击上传图片<div id="reversePreview"></div></div>
+            <input type="file" id="reverseImg" accept="image/*" class="hidden" onchange="onReversePicked(event)">
+          </div>
+          <div class="field hidden" id="freeQField">
+            <label>我的问题</label>
+            <textarea id="freeQuestion" placeholder="例如：这类人像提示词怎样写光影更有层次？"></textarea>
+          </div>
+          <button class="btn primary block" onclick="runWorkbench()">让 AI 分析整理</button>
+          <button class="btn ghost block" style="margin-top:6px;height:40px" onclick="resetConversation()">清空对话，开启新任务</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head">
+          <h3>分析结果</h3>
+          <button class="btn sm hidden" id="btnCopyResult" onclick="copyResult()">复制</button>
+          <button class="btn sm hidden" id="btnSaveTpl" onclick="saveAsTemplate()">存为模版</button>
+        </div>
+        <div class="group-body">
+          <div class="result-body" id="wbResult">
+            <p style="color:var(--ink-3);margin:0">在上方选取分类或提示词，然后点「让 AI 分析整理」。<br><br>模型接入配置在「我的」页面管理。</p>
+          </div>
+          <div class="followup hidden" id="followupBox">
+            <textarea id="followupInput" placeholder="基于本次结果继续追问…" rows="1"></textarea>
+            <button class="btn primary" onclick="sendFollowup()">发送</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head"><h3>历史记录</h3></div>
+        <div class="group-body">
+          <div id="historyList"></div>
+          <div class="empty hidden" id="historyEmpty" style="padding:20px"><p>暂无 AI 分析记录</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 4. 我的 ========== -->
+    <section class="page" id="viewProfile" data-tab="3">
+      <div class="profile-hero">
+        <button class="hero-avatar" id="heroAvatar" onclick="openProfileEdit()" title="编辑昵称头像">🎨</button>
+        <div class="hero-info">
+          <div class="hero-name" id="heroName">我的相册</div>
+          <div class="hero-sub" id="heroSub">还没有作品集，上传第一张满意的好图吧</div>
+          <div class="storage-bar">
+            <div class="bar"><div class="ls" id="barLs" style="width:0%"></div><div class="imgs" id="barImgs" style="width:0%"></div></div>
+            <div class="meta" id="storageMeta"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head">
+          <h3>我的相册</h3>
+          <button class="btn sm" onclick="openGroupModal()">分组</button>
+          <button class="btn sm primary" onclick="openGalleryEdit()">上传</button>
+        </div>
+        <div class="group-body">
+          <div class="hscroll" id="groupBar"></div>
+          <div class="album-grid" id="albumGrid"></div>
+          <div class="empty hidden" id="albumEmpty" style="padding:28px 12px">
+            <p>相册还是空的，把自己生成的满意作品收进来</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="list-row" style="box-shadow:none">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3l1.7 4.6L18.5 9l-4.8 1.4L12 15l-1.7-4.6L5.5 9l4.8-1.4L12 3z"/></svg></span>
+          <span class="label">模型接入</span>
+          <button class="btn sm primary" onclick="openModelModal()">新增</button>
+        </div>
+        <div class="group-body" style="padding-top:0"><div id="modelList"></div></div>
+      </div>
+
+      <div class="group">
+        <div class="group-head"><h3>数据管理</h3></div>
+        <div style="padding-bottom:4px">
+          <button class="list-row" onclick="openExportModal()"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></span><span class="label">导出分类合集<span class="sub">Markdown / 纯文本</span></span><span class="chev">›</span></button>
+          <button class="list-row" onclick="exportJSON()"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span><span class="label">导出 JSON 备份<span class="sub">含相册图片，可跨设备恢复</span></span><span class="chev">›</span></button>
+          <button class="list-row" onclick="document.getElementById('importFile').click()"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9m0 0 4 4m-4-4-4 4"/><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/></svg></span><span class="label">导入备份<span class="sub">会覆盖当前数据</span></span><span class="chev">›</span></button>
+          <input type="file" id="importFile" accept=".json" class="hidden" onchange="importJSON(event)">
+          <button class="list-row danger" onclick="clearAll()"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></span><span class="label">清空全部数据</span><span class="chev">›</span></button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head"><h3>分类与标签</h3></div>
+        <div style="padding-bottom:4px">
+          <button class="list-row" onclick="openCatModal()"><span class="ico">＋</span><span class="label">新建分类</span><span class="chev">›</span></button>
+          <button class="list-row" onclick="editActiveCat()"><span class="ico">✎</span><span class="label">管理当前分类<span class="sub" id="activeCatHint"></span></span><span class="chev">›</span></button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-head"><h3>关于</h3></div>
+        <div class="group-body">
+          <p style="font-size:13.5px;color:var(--ink-2);margin:0 0 4px">提示词收藏与学习工作台 · 离线单页应用</p>
+          <p style="font-size:12.5px;color:var(--ink-3);margin:0">所有提示词、相册图片与 API Key 仅保存在本机浏览器中，不会上传到其他服务器。换设备请先导出 JSON 备份。</p>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:11.5px;color:var(--ink-4);padding:6px 0 4px">版本 2.0 · Liquid Glass</div>
+    </section>
+  </div>
+
+  <!-- ===== 液态玻璃 Tab（可拖动滑块 + 内容横滑联动） ===== -->
+  <nav class="tabdock" id="tabdock" aria-label="主导航">
+    <div class="tabpill" id="tabpill"></div>
+    <button class="tab-item on" data-tab="0" aria-label="提示词库">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2.2"/><rect x="14" y="3" width="7" height="7" rx="2.2"/><rect x="3" y="14" width="7" height="7" rx="2.2"/><rect x="14" y="14" width="7" height="7" rx="2.2"/></svg>
+      <span>库</span>
+    </button>
+    <button class="tab-item" data-tab="1" aria-label="拼装器">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3 3.7-3.7z"/></svg>
+      <span>拼装</span>
+    </button>
+    <button class="tab-item" data-tab="2" aria-label="AI 工作台">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.6L18.5 9l-4.8 1.4L12 15l-1.7-4.6L5.5 9l4.8-1.4L12 3z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z"/></svg>
+      <span>工作台</span>
+    </button>
+    <button class="tab-item" data-tab="3" aria-label="我的">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>
+      <span>我的</span>
+    </button>
+  </nav>
+</div>
+
+<!-- ===== 弹层：更多 ===== -->
+<div class="mask hidden" id="moreMask" onclick="if(event.target===this)closeMoreSheet()">
+  <div class="actionsheet">
+    <div class="as-group">
+      <div class="as-head"><div class="t">更多操作</div></div>
+      <button class="as-item" onclick="closeMoreSheet();openCatModal()"><span class="ico">＋</span>新建分类</button>
+      <button class="as-item" onclick="closeMoreSheet();openExportModal()"><span class="ico">↓</span>导出分类合集</button>
+      <button class="as-item" onclick="closeMoreSheet();exportJSON()"><span class="ico">⇩</span>导出 JSON 备份</button>
+      <button class="as-item" onclick="closeMoreSheet();document.getElementById('importFile').click()"><span class="ico">⇧</span>导入备份</button>
+      <button class="as-item danger" onclick="closeMoreSheet();clearAll()"><span class="ico">⌫</span>清空全部数据</button>
+    </div>
+    <button class="as-cancel" onclick="closeMoreSheet()">取消</button>
+  </div>
+</div>
+
+<!-- ===== 弹层：长按卡片操作面板 ===== -->
+<div class="mask hidden" id="actionMask" onclick="if(event.target===this)closeActionSheet()">
+  <div class="actionsheet" id="actionSheet"></div>
+</div>
+
+<!-- ===== 弹层：排序 ===== -->
+<div class="mask hidden" id="sortMask" onclick="if(event.target===this)closeSortSheet()">
+  <div class="actionsheet">
+    <div class="as-group" id="sortOptions">
+      <div class="as-head"><div class="t">排序方式</div></div>
+      <button class="as-item" data-sort="updated" onclick="chooseSort('updated')">最近更新</button>
+      <button class="as-item" data-sort="used" onclick="chooseSort('used')">最近使用</button>
+      <button class="as-item" data-sort="level" onclick="chooseSort('level')">掌握程度</button>
+      <button class="as-item" data-sort="title" onclick="chooseSort('title')">标题</button>
+    </div>
+    <button class="as-cancel" onclick="closeSortSheet()">取消</button>
+  </div>
+</div>
+
+<!-- ===== 弹层：编辑提示词 ===== -->
+<div class="mask hidden" id="editMask">
+  <div class="modal">
+    <div class="modal-grabber" data-drag="editMask"><i></i></div>
+    <div class="modal-head"><h3 id="editModalTitle">记录提示词</h3><button class="icon-btn" onclick="closeEdit()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field full"><label>标题 *</label><input id="fTitle" placeholder="例如：CCD 冷感人像 · 窗边逆光"></div>
+        <div class="field full"><label>所属分类</label><select id="fCategory"></select></div>
+        <div class="field full"><label>标签（回车添加）</label>
+          <div class="tag-input-wrap" id="tagWrap"><input id="tagInput" placeholder="如：人像、逆光、复古" onkeydown="onTagKey(event)"></div>
+        </div>
+        <div class="field full"><label>提示词正文 *（可用 {主体}、{风格} 占位符做模版）</label>
+          <textarea id="fText" rows="6"></textarea>
+        </div>
+        <div class="field full"><label>负面提示词</label><textarea id="fNegative" rows="2" placeholder="不希望出现的元素：模糊、畸变、低画质…"></textarea></div>
+        <div class="field"><label>画幅 / 比例</label><input id="fRatio" placeholder="如 3:4、16:9"></div>
+        <div class="field"><label>生成模型</label><input id="fGenModel" placeholder="如 Midjourney、即梦"></div>
+      </div>
+      <div class="field full"><label>Seed</label><input id="fSeed" placeholder="可选"></div>
+      <div class="field"><label>掌握程度：<span id="levelVal">3</span> 星</label>
+        <select id="fLevel" onchange="document.getElementById('levelVal').textContent=this.value">
+          <option value="1">1 · 刚收藏</option><option value="2">2 · 试过一次</option>
+          <option value="3" selected>3 · 常用</option><option value="4">4 · 熟练</option><option value="5">5 · 已吃透</option>
+        </select>
+      </div>
+      <div class="field"><label>案例图片（可多张，自动压缩存本机）</label>
+        <div class="img-picker" id="imgPicker">
+          <button class="img-add" onclick="document.getElementById('imgInput').click()">＋<span>上传</span></button>
+          <input type="file" id="imgInput" accept="image/*" multiple class="hidden" onchange="onImagesPicked(event)">
+        </div>
+      </div>
+      <div class="field"><label>备注 / 使用心得</label><textarea id="fNote" rows="3"></textarea></div>
+      <div class="check-row"><input type="checkbox" id="fFavorite"><label for="fFavorite">加入收藏</label></div>
+      <div class="check-row"><input type="checkbox" id="fPinned"><label for="fPinned">置顶展示</label></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeEdit()">取消</button>
+      <button class="btn primary" onclick="savePrompt()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：分类 ===== -->
+<div class="mask hidden" id="catMask">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-grabber" data-drag="catMask"><i></i></div>
+    <div class="modal-head"><h3 id="catModalTitle">新分类</h3><button class="icon-btn" onclick="closeCat()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>分类名称</label><input id="catName" placeholder="人像 / 风格 / 光影 / 构图…"></div>
+      <div class="field" style="margin-bottom:0"><label>标记灰阶</label><div class="color-row" id="colorRow"></div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn danger hidden" id="catDeleteBtn" onclick="deleteCat()">删除</button>
+      <div class="grow"></div>
+      <button class="btn ghost" onclick="closeCat()">取消</button>
+      <button class="btn primary" onclick="saveCat()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：套用模版 ===== -->
+<div class="mask hidden" id="applyMask">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-grabber" data-drag="applyMask"><i></i></div>
+    <div class="modal-head"><h3>套用模版</h3><button class="icon-btn" onclick="closeApply()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="var-form" id="applyVars"></div>
+      <div class="field" style="margin-bottom:0"><label>生成的成品提示词</label>
+        <textarea id="applyResult" rows="6" readonly></textarea>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="copyApplyResult()">复制</button>
+      <button class="btn primary" onclick="closeApply()">完成</button>
+    </div>
+    <label class="check-row" style="padding:0 20px 14px;font-size:13px;color:var(--ink-3)"><input type="checkbox" id="applyMarkUsed" checked> 记一次使用</label>
+  </div>
+</div>
+
+<!-- ===== 弹层：版本历史 ===== -->
+<div class="mask hidden" id="versionMask">
+  <div class="modal">
+    <div class="modal-grabber" data-drag="versionMask"><i></i></div>
+    <div class="modal-head"><h3>版本历史</h3><button class="icon-btn" onclick="closeVersion()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body" id="versionList"></div>
+  </div>
+</div>
+
+<!-- ===== 弹层：翻译 ===== -->
+<div class="mask hidden" id="transMask">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-grabber" data-drag="transMask"><i></i></div>
+    <div class="modal-head"><h3>中英互译</h3><button class="icon-btn" onclick="closeTrans()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>原文</label><div class="translate-out" id="transSource"></div></div>
+      <div class="field" style="margin-bottom:0"><label>译文</label><div class="translate-out" id="transResult">翻译中…</div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="copyTrans()">复制译文</button>
+      <button class="btn primary" onclick="replaceByTrans()">用译文替换正文</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：导出合集 ===== -->
+<div class="mask hidden" id="exportMask">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-grabber" data-drag="exportMask"><i></i></div>
+    <div class="modal-head"><h3>导出分类合集</h3><button class="icon-btn" onclick="closeExport()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>导出范围</label><select id="exportScope"></select></div>
+      <div class="field" style="margin-bottom:0"><label>文件格式</label>
+        <select id="exportFormat"><option value="md">Markdown（.md，带字段排版）</option><option value="txt">纯文本（.txt，仅正文）</option></select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeExport()">取消</button>
+      <button class="btn primary" onclick="doExport()">导出文件</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：图集编辑 ===== -->
+<div class="mask hidden" id="galleryMask">
+  <div class="modal">
+    <div class="modal-grabber" data-drag="galleryMask"><i></i></div>
+    <div class="modal-head"><h3 id="galleryModalTitle">上传好图</h3><button class="icon-btn" onclick="closeGalleryEdit()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field full"><label>标题 *</label><input id="gTitle" placeholder="如：窗边逆光人像 · 成片"></div>
+        <div class="field full"><label>所属分组</label><select id="gGroup"></select></div>
+        <div class="field full"><label>关联提示词（可选）</label><select id="gPrompt" onchange="refreshLinkedPrompt()"></select></div>
+        <div class="field full hidden" id="gPromptLink">
+          <div class="translate-out" style="display:flex;align-items:center;gap:10px;padding:10px 14px">
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="gPromptLinkTitle"></span>
+            <button class="btn sm" onclick="copyLinkedPrompt()">复制</button>
+          </div>
+        </div>
+        <div class="field full"><label>图集图片（可多张，自动压缩存本机）</label>
+          <div class="img-picker" id="gImgPicker">
+            <button class="img-add" onclick="document.getElementById('gImgInput').click()">＋<span>上传</span></button>
+            <input type="file" id="gImgInput" accept="image/*" multiple class="hidden" onchange="onGalleryImagesPicked(event)">
+          </div>
+        </div>
+        <div class="field full"><label>备注 / 心得</label><textarea id="gNote" rows="3" placeholder="这组图的效果、参数或可复用的要点"></textarea></div>
+        <div class="field full" style="margin-bottom:0"><label>标签（回车添加）</label>
+          <div class="tag-input-wrap" id="gTagWrap"><input id="gTagInput" placeholder="如：人像、成片、逆光" onkeydown="onGalleryTagKey(event)"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn danger hidden" id="gDeleteBtn" onclick="deleteGallery()">删除</button>
+      <div class="grow"></div>
+      <button class="btn" id="gReverseBtn" onclick="reverseFromGallery()">反推</button>
+      <button class="btn primary" onclick="saveGallery()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：分组管理 ===== -->
+<div class="mask hidden" id="groupMask">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-grabber" data-drag="groupMask"><i></i></div>
+    <div class="modal-head"><h3 id="groupModalTitle">相册分组</h3><button class="icon-btn" onclick="closeGroupModal()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div id="groupList"></div>
+      <div class="field" style="margin-top:16px"><label>分组名称</label><input id="groupName" placeholder="如：人像成片、风格测试"></div>
+      <div class="field"><label>图标</label><div class="icon-row" id="groupIconRow"></div></div>
+      <div class="field" style="margin-bottom:0"><label>灰阶</label><div class="color-row" id="groupColorRow"></div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn danger hidden" id="groupDeleteBtn" onclick="deleteGroup()">删除</button>
+      <div class="grow"></div>
+      <button class="btn ghost" onclick="closeGroupModal()">取消</button>
+      <button class="btn primary" onclick="saveGroup()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：模型配置 ===== -->
+<div class="mask hidden" id="modelMask">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-grabber" data-drag="modelMask"><i></i></div>
+    <div class="modal-head"><h3 id="modelModalTitle">模型配置</h3><button class="icon-btn" onclick="closeModelModal()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>配置名称</label><input id="mName" placeholder="如：DeepSeek 日常 / Gemini 视觉"></div>
+      <div class="field"><label>协议类型</label>
+        <select id="mProvider" onchange="onModelProviderChange()">
+          <option value="openai">OpenAI 兼容（OpenAI / DeepSeek / Kimi / 通义）</option>
+          <option value="gemini">Google Gemini</option>
+        </select>
+      </div>
+      <div class="field"><label>接口地址 Base URL</label><input id="mBaseUrl"></div>
+      <div class="field"><label>API Key</label><input id="mApiKey" type="password" placeholder="sk-…"></div>
+      <div class="field"><label>模型名称</label><input id="mModel" placeholder="gpt-4o-mini / deepseek-chat / gemini-1.5-flash"></div>
+      <div class="field" style="margin-bottom:0"><label>温度：<span id="mTempVal">0.7</span></label>
+        <input id="mTemp" type="range" min="0" max="1" step="0.1" value="0.7" oninput="document.getElementById('mTempVal').textContent=this.value">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModelModal()">取消</button>
+      <button class="btn primary" onclick="saveModelConfig()">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 弹层：个人资料 ===== -->
+<div class="mask hidden" id="profileMask">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-grabber" data-drag="profileMask"><i></i></div>
+    <div class="modal-head"><h3>编辑资料</h3><button class="icon-btn" onclick="closeProfileEdit()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field"><label>昵称</label><input id="pName" placeholder="给自己的相册起个名字"></div>
+      <div class="field" style="margin-bottom:0"><label>头像图标</label><div class="icon-row" id="pAvatarRow"></div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeProfileEdit()">取消</button>
+      <button class="btn primary" onclick="saveProfile()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox hidden" id="lightbox" onclick="this.classList.add('hidden')"><img id="lightboxImg" alt=""></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

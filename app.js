@@ -336,6 +336,16 @@ function tabRects(){
 }
 function layoutPill(i, animate = true){
   const rs = tabRects()[i]; if(!rs) return;
+  // 用 GSAP 做带轻微回弹的吸附；极少数情况下退回 CSS
+  if(typeof window.gsap !== 'undefined' && animate){
+    gsap.killTweensOf(pillEl);
+    gsap.to(pillEl, {
+      x: rs.l, width: rs.w,
+      duration: .42, ease: 'power3.out', overwrite: true,
+      onStart(){ pillEl.style.transition = 'none'; }
+    });
+    return;
+  }
   if(!animate) pillEl.style.transition = 'none';
   pillEl.style.width = rs.w + 'px';
   pillEl.style.transform = `translateX(${rs.l}px)`;
@@ -356,6 +366,7 @@ function setPillProgress(p){
 function setTab(i, animate = true){
   curTab = Math.max(0, Math.min(TAB_ORDER.length - 1, i));
   const key = TAB_ORDER[curTab];
+  const changed = state.ui.view !== key;
   state.ui.view = key;
   pagerEl.classList.toggle('dragging', !animate);
   pagerEl.style.transform = `translateX(${-curTab * 25}%)`;
@@ -367,6 +378,17 @@ function setTab(i, animate = true){
   onPageScroll();
   // 首屏轻微进入动画（每次切换只跑一次）
   pageEls.forEach((p, k) => p.classList.toggle('fresh', k === curTab && animate));
+
+  /*
+   * 切换时按需重渲染目标页。
+   * 之前「我的」只在启动时渲染一次，切过去看到的是旧内容，
+   * 屏幕信息面板也因此是空的。
+   */
+  if(key === 'library') renderLibrary();
+  else if(key === 'workbench') renderWorkbench();
+  else if(key === 'profile') renderProfile();
+
+  if(changed){ try{ persist(); }catch(_){} }
 }
 
 /* 兼容旧代码调用 */
@@ -437,50 +459,150 @@ pagerEl.addEventListener('pointerup', endSwipe);
 pagerEl.addEventListener('pointercancel', endSwipe);
 pagerEl.addEventListener('pointerleave', e=>{ if(swipe && e.buttons === 0) endSwipe(e); });
 
-/* ---- 拖动 Tab 滑块（辅助交互 A） ---- */
-let dragPill = null;
-dockEl.addEventListener('pointerdown', e=>{
-  if(!e.target.closest('.tab-item')) return;
-  const rs = tabRects();
-  dragPill = {x0:e.clientX, l0:rs[curTab].l, moved:false, id:e.pointerId};
-  dockEl.classList.add('dragging');
-  try{ dockEl.setPointerCapture(e.pointerId); }catch(_){}
-});
-dockEl.addEventListener('pointermove', e=>{
-  if(!dragPill) return;
-  const dx = e.clientX - dragPill.x0;
-  if(Math.abs(dx) > 3) dragPill.moved = true;
-  if(!dragPill.moved) return;
-  e.preventDefault();
-  const rs = tabRects();
-  const min = rs[0].l, max = rs[rs.length-1].l;
-  let x = Math.max(min, Math.min(max, dragPill.l0 + dx));
-  pillEl.style.transition = 'none';
-  pillEl.style.width = rs[0].w + 'px';
-  pillEl.style.transform = `translateX(${x}px)`;
-  const p = (x - min) / Math.max(1, (max - min)) * (rs.length - 1);
-  tabEls.forEach((t, k) => t.classList.toggle('on', Math.round(p) === k));
-  layoutPill(Math.round(p), false); // 让宽高切换自然
-  dockEl.dataset.dragTarget = String(Math.round(p));
-}, {passive:false});
-function endDragPill(e){
-  if(!dragPill) return;
-  const moved = dragPill.moved; dragPill = null;
-  dockEl.classList.remove('dragging');
-  pillEl.style.transition = '';
-  if(moved){
-    const i = Number(dockEl.dataset.dragTarget ?? curTab);
-    setTab(i);
+/* ============================================================
+ * Tab 栏拖动切换
+ * ------------------------------------------------------------------
+ * 之前拖动"没反应"的根因：指针松开后浏览器还会补发一次 click，
+ * click 落在原来那个 tab 上，于是 setTab 又把页面切回去了。
+ * 这里用 moved 标记 + 捕获阶段拦截来彻底吞掉那次 click。
+ * 松手用 GSAP 做带惯性的吸附回弹（没加载到 GSAP 就退回 CSS 过渡）。
+ * ============================================================ */
+const HAS_GSAP = typeof window.gsap !== 'undefined';
+
+/** 滑动指示器到指定 tab（GSAP 或 CSS 过渡） */
+function animatePillTo(x, w, opts = {}){
+  const dur = opts.duration ?? 0.42;
+  const ease = opts.ease ?? 'power3.out';
+  if(HAS_GSAP && !opts.immediate){
+    gsap.killTweensOf(pillEl);
+    gsap.to(pillEl, {
+      x, width: w, duration: dur, ease,
+      overwrite: true,
+      onStart(){ pillEl.style.transition = 'none'; }
+    });
+  }else{
+    pillEl.style.transition = opts.immediate ? 'none' : '';
+    pillEl.style.width = w + 'px';
+    pillEl.style.transform = `translateX(${x}px)`;
   }
-  delete dockEl.dataset.dragTarget;
 }
-dockEl.addEventListener('pointerup', endDragPill);
-dockEl.addEventListener('pointercancel', endDragPill);
+
+let dockDrag = null;
+
+function dockDown(e){
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  const rs = tabRects();
+  dockDrag = {
+    x0: e.clientX,
+    y0: e.clientY,
+    l0: rs[curTab].l,
+    w0: rs[curTab].w,
+    moved: false,
+    target: curTab,
+    lastX: e.clientX,
+    vx: 0,
+    t: performance.now()
+  };
+  dockEl.classList.add('dragging');
+  pillEl.style.transition = 'none';
+  if(HAS_GSAP) gsap.killTweensOf(pillEl);
+  try{ dockEl.setPointerCapture(e.pointerId); }catch(_){}
+}
+
+function dockMove(e){
+  if(!dockDrag) return;
+  const dx = e.clientX - dockDrag.x0;
+  const dy = e.clientY - dockDrag.y0;
+
+  // 判定方向：竖向滑动交给页面滚动，不做切换
+  if(!dockDrag.moved){
+    if(Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    if(Math.abs(dy) > Math.abs(dx) * 1.4){ dockDrag = null; dockEl.classList.remove('dragging'); return; }
+    dockDrag.moved = true;
+  }
+
+  e.preventDefault();
+
+  const rs = tabRects();
+  const min = rs[0].l, max = rs[rs.length - 1].l;
+  let x = Math.max(min, Math.min(max, dockDrag.l0 + dx));
+
+  // 拖动时把指示器按"跟手的宽度"拉宽，松手再收回到 tab 宽度
+  const stretch = Math.min(10, Math.abs(dx) * 0.12);
+  const w = rs[0].w + stretch;
+
+  pillEl.style.width = w + 'px';
+  pillEl.style.transform = `translateX(${x}px)`;
+
+  // 连续进度 → 高亮跟随
+  const p = (x - min) / Math.max(1, (max - min)) * (rs.length - 1);
+  const idx = Math.round(p);
+  if(idx !== dockDrag.target){
+    dockDrag.target = idx;
+    tabEls.forEach((t, k) => t.classList.toggle('on', k === idx));
+  }
+  // 记录速度用于判方向
+  const now = performance.now();
+  dockDrag.vx = (e.clientX - dockDrag.lastX) / Math.max(1, now - dockDrag.t) * 1000;
+  dockDrag.lastX = e.clientX;
+  dockDrag.t = now;
+}
+
+function dockUp(e){
+  if(!dockDrag) return;
+  const d = dockDrag;
+  dockDrag = null;
+  dockEl.classList.remove('dragging');
+
+  if(!d.moved){
+    // 没移动 → 当作点击，交给 click 处理
+    return;
+  }
+
+  /*
+   * 拖过 → 吞掉随后可能补发的 click，否则会跳回原页。
+   * 但必须定时清掉：如果用触摸事件拖动，浏览器不一定补发 click，
+   * 标志会一直留着，把用户下一次真实点击也吞掉（表现为"点了没反应"）。
+   */
+  dockEl.dataset.suppressClick = '1';
+  clearTimeout(dockUp._t);
+  dockUp._t = setTimeout(()=>{ delete dockEl.dataset.suppressClick; }, 350);
+
+  /*
+   * 吸附到"离指示器最近"的那一格，与手指位置一一对应，行为可预期。
+   * （之前加过按速度再进一格，实测会一次跳两格，反而像失灵。）
+   */
+  const rs = tabRects();
+  const min = rs[0].l, max = rs[rs.length - 1].l;
+  const step = (max - min) / (rs.length - 1) || 1;
+  const curX = d.l0 + (e.clientX - d.x0);
+  const clamped = Math.max(min, Math.min(max, curX));
+  let i = Math.round((clamped - min) / step);
+  i = Math.max(0, Math.min(TAB_ORDER.length - 1, i));
+  setTab(i);
+}
+
+dockEl.addEventListener('pointerdown', dockDown);
+dockEl.addEventListener('pointermove', dockMove, {passive:false});
+dockEl.addEventListener('pointerup', dockUp);
+dockEl.addEventListener('pointercancel', dockUp);
+
+/* 捕获阶段拦截：拖动后那一次 click 一律丢弃 */
+dockEl.addEventListener('click', e=>{
+  if(dockEl.dataset.suppressClick){
+    delete dockEl.dataset.suppressClick;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+}, true);
 
 /* Tab 点击 */
-tabEls.forEach(t => t.addEventListener('click', ()=>{
-  if(dockEl.dataset.suppressClick){ delete dockEl.dataset.suppressClick; return; }
-  setTab(Number(t.dataset.tab));
+tabEls.forEach(t => t.addEventListener('click', e=>{
+  if(dockEl.dataset.suppressClick) return;
+  const i = Number(t.dataset.tab);
+  if(i === curTab) return;
+  setTab(i);
 }));
 
 /* ============================================================
@@ -1658,6 +1780,7 @@ function deleteHistory(id){ state.history = state.history.filter(x=>x.id!==id); 
 function renderProfile(){
   renderProfileHero(); renderGroupBar(); renderAlbum(); renderModelList();
   $('activeCatHint').textContent = state.ui.activeCat==='all' ? '（当前为「全部」，先选分类）' : `（${catOf(state.ui.activeCat)?.name||''}）`;
+  renderDiagnostics();
 }
 function renderProfileHero(){
   $('heroAvatar').textContent = state.profile.avatar||'🎨';
@@ -2220,57 +2343,102 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
  * 绝对定位的底部元素就会"浮"到半空。
  * visualViewport 给出的是真实可视区，用它换算底部偏移最可靠。
  * ============================================================ */
+/* ============================================================
+ * 18.5 视口 / 安全区适配
+ * ------------------------------------------------------------------
+ * 目标规格（iPhone 16 Pro）：画布 402×874，状态栏 59，导航栏 44，
+ * 底部指示器 34，安全边距 16。
+ *
+ * iOS PWA 的两个坑：
+ *   1) env(safe-area-inset-*) 有时返回 0，导致底部那 34pt 没让出来，
+ *      Tab 栏贴到屏幕最边缘、或算错位置浮在半空。
+ *   2) visualViewport 在键盘弹起时与布局视口不一致。
+ * 做法：用探针实测 env()；实测为 0 且判定为全面屏 iPhone 时，
+ *      回落到规格值 59 / 34，保证布局与真机一致。
+ * ============================================================ */
+const IOS_SPEC = { safeTop: 59, navH: 44, safeBottom: 34, margin: 16 };
+
+const viewportMetrics = {
+  innerW: 0, innerH: 0,
+  vvW: 0, vvH: 0, vvScale: 1,
+  screenW: 0, screenH: 0,
+  dpr: 1,
+  safeT: 0, safeB: 0,
+  measured: false,
+  standalone: false,
+  isIOS: false
+};
+
 (function trackViewport(){
-  const vv = window.visualViewport;
   const root = document.documentElement;
-  if(!vv) return;
+  const vv = window.visualViewport;
 
-  /*
-   * 用真实元素量出安全区底部高度。
-   * env(safe-area-inset-bottom) 在部分 iOS PWA 场景下取不到，
-   * 用一个探针 div 实际渲染出来量，比读 env() 可靠。
-   */
-  const probe = document.createElement('div');
-  probe.setAttribute('aria-hidden', 'true');
-  probe.style.cssText =
-    'position:fixed;left:0;bottom:0;width:1px;height:env(safe-area-inset-bottom,0px);' +
-    'pointer-events:none;visibility:hidden;z-index:-1';
-  document.body.appendChild(probe);
-
-  function safeAreaBottom(){
-    const h = probe.getBoundingClientRect().height;
-    return Number.isFinite(h) ? h : 0;
+  /** 用探针元素实测某个方向的安全区（比直接读 env() 可靠） */
+  function probe(edge){
+    const d = document.createElement('div');
+    d.setAttribute('aria-hidden', 'true');
+    d.style.cssText =
+      'position:fixed;left:0;width:1px;visibility:hidden;pointer-events:none;z-index:-1;' +
+      (edge === 'top'
+        ? 'top:0;height:env(safe-area-inset-top,0px);'
+        : 'bottom:0;height:env(safe-area-inset-bottom,0px);');
+    document.body.appendChild(d);
+    const h = d.getBoundingClientRect().height || 0;
+    d.remove();
+    return h;
   }
+
+  const ua = navigator.userAgent;
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = matchMedia('(display-mode: standalone)').matches ||
+                     navigator.standalone === true;
 
   let raf = 0;
   function update(){
     raf = 0;
+
+    // ---- 实测安全区 ----
+    let st = probe('top');
+    let sb = probe('bottom');
+
     /*
-     * 键盘弹起的判定：
-     * 真实的"可视区底部" = vv.height + vv.offsetTop。
-     * 只有它明显小于 window.innerHeight 时才算键盘弹起。
-     * 阈值放宽到 150px，避免 iOS 工具栏高度变化被误判成键盘。
+     * 兜底：iOS 全面屏（屏幕高度 ≥ 800）实测为 0 时，用规格值。
+     * 非全面屏（SE 等）实测通常也是 0，此时保持 0 才对。
      */
-    const visibleBottom = vv.height + vv.offsetTop;
-    const offsetBottom = Math.max(0, window.innerHeight - visibleBottom);
+    const screenH = Math.round(window.screen?.height || 0);
+    const isFullScreenIPhone = isIOS && screenH >= 800;
+    if(isFullScreenIPhone && st < 20) st = IOS_SPEC.safeTop;
+    if(isFullScreenIPhone && sb < 10) sb = IOS_SPEC.safeBottom;
+
+    // 桌面手机框模式用固定的小安全区
+    if(document.body.classList.contains('desktop-frame')){
+      st = 14; sb = 0;
+    }
+
+    root.style.setProperty('--safe-t', st.toFixed(0) + 'px');
+    root.style.setProperty('--safe-b', sb.toFixed(0) + 'px');
+
+    // ---- 键盘判定 ----
+    let offsetBottom = 0;
+    if(vv){
+      const visibleBottom = vv.height + vv.offsetTop;
+      offsetBottom = Math.max(0, window.innerHeight - visibleBottom);
+    }
     root.style.setProperty('--vvb', offsetBottom.toFixed(1) + 'px');
 
     const kb = offsetBottom > 150;
     document.body.classList.toggle('kb-open', kb);
     const barWrap = document.getElementById('tabbarFixed');
+    const shell = document.getElementById('appShell');
     if(kb){
-      // 键盘弹起：外壳底边缩到键盘上沿（fixed inset 的 bottom 值）
-      const shell = document.getElementById('appShell');
       if(shell) shell.style.bottom = offsetBottom.toFixed(0) + 'px';
-      // Tab 栏整条收起，避免挡住输入框（iOS 原生做法）
       if(barWrap){
         barWrap.style.transform = 'translateY(160%)';
         barWrap.style.opacity = '0';
         barWrap.style.pointerEvents = 'none';
       }
     }else{
-      // 键盘收起：交回 CSS 的 inset:0 —— 这是全屏贴底的关键
-      const shell = document.getElementById('appShell');
       if(shell) shell.style.bottom = '';
       if(barWrap){
         barWrap.style.transform = '';
@@ -2278,22 +2446,64 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
         barWrap.style.pointerEvents = '';
       }
     }
-    /*
-     * Tab 栏的位置完全交给 CSS：.tabbar-fixed 用 bottom:0 钉住视口底边，
-     * 间距由容器 padding-bottom 里的 env(safe-area-inset-bottom) 表现。
-     * 这里不再写任何 bottom —— 之前正是 JS/CSS 各自算一遍导致浮空。
-     */
+
+    // ---- 记录指标（诊断用） ----
+    viewportMetrics.innerW = Math.round(window.innerWidth);
+    viewportMetrics.innerH = Math.round(window.innerHeight);
+    viewportMetrics.vvW = vv ? Math.round(vv.width) : 0;
+    viewportMetrics.vvH = vv ? Math.round(vv.height) : 0;
+    viewportMetrics.vvScale = vv ? Number(vv.scale.toFixed(2)) : 1;
+    viewportMetrics.screenW = Math.round(window.screen?.width || 0);
+    viewportMetrics.screenH = screenH;
+    viewportMetrics.dpr = window.devicePixelRatio;
+    viewportMetrics.safeT = Math.round(st);
+    viewportMetrics.safeB = Math.round(sb);
+    viewportMetrics.measured = true;
+    viewportMetrics.standalone = standalone;
+    viewportMetrics.isIOS = isIOS;
+
+    // 安全区变了要重排滑块
+    if(typeof layoutPill === 'function') layoutPill(curTab, false);
   }
+
   const schedule = ()=>{ if(!raf) raf = requestAnimationFrame(update); };
-  vv.addEventListener('resize', schedule, {passive:true});
-  vv.addEventListener('scroll', schedule, {passive:true});
+  if(vv){
+    vv.addEventListener('resize', schedule, {passive:true});
+    vv.addEventListener('scroll', schedule, {passive:true});
+  }
   window.addEventListener('resize', schedule, {passive:true});
   window.addEventListener('orientationchange', ()=>{ schedule(); setTimeout(schedule, 300); }, {passive:true});
-  // 首帧 + 稍后再确认一次（iOS PWA 启动时安全区可能延迟就绪）
+
+  // 首帧 + 多次确认（iOS PWA 启动时安全区可能延迟就绪）
   update();
-  setTimeout(update, 300);
-  setTimeout(update, 1000);
+  setTimeout(update, 120);
+  setTimeout(update, 400);
+  setTimeout(update, 1200);
 })();
+
+/** 供「我的 → 屏幕信息」调用的诊断输出 */
+function renderDiagnostics(){
+  const el = $('diagBox');
+  if(!el) return;
+  const m = viewportMetrics;
+  const shell = document.getElementById('appShell')?.getBoundingClientRect();
+  const dock = document.getElementById('tabdock')?.getBoundingClientRect();
+  const row = (k, v)=>`<div style="display:flex;gap:8px;font-size:12px;line-height:1.7">
+      <span style="color:var(--ink-3);min-width:104px;flex:none">${k}</span>
+      <span style="color:var(--ink);font-variant-numeric:tabular-nums">${v}</span></div>`;
+  el.innerHTML = [
+    row('运行模式', m.standalone ? '主屏 App（全屏）' : '浏览器内'),
+    row('设备', m.isIOS ? 'iOS' : '其他'),
+    row('CSS 视口', `${m.innerW} × ${m.innerH}`),
+    row('可视视口', `${m.vvW} × ${m.vvH}（缩放 ${m.vvScale}）`),
+    row('屏幕尺寸', `${m.screenW} × ${m.screenH}`),
+    row('像素比', m.dpr + 'x'),
+    row('安全区 上/下', `${m.safeT} / ${m.safeB}`),
+    row('外壳高度', shell ? Math.round(shell.height) + 'px' : '—'),
+    row('外壳贴底', shell ? (Math.round(shell.bottom) === m.innerH ? '是' : `否（差 ${Math.round(m.innerH - shell.bottom)}px）`) : '—'),
+    row('Tab 胶囊距底', dock ? Math.round(m.innerH - dock.bottom) + 'px' : '—'),
+  ].join('');
+}
 
 /* 桌面手机框模式标记：命中媒体查询时给 body 加 class，
    让 JS 不去覆盖 .tabdock 的 bottom（桌面端用 absolute 定位） */
@@ -2337,5 +2547,5 @@ Object.assign(window, {
   openMoreSheet, closeMoreSheet, openLightbox, removeTag, removeImage, onTagKey,
   /* 本轮新增 */
   openDetail, closeDetail, openViewer, openViewerAt, openCardViewer, openGalleryViewer,
-  closeViewer, deleteVersion, clearVersions, onAlbumClick
+  closeViewer, deleteVersion, clearVersions, onAlbumClick, renderDiagnostics
 });

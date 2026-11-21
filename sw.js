@@ -8,13 +8,14 @@
  *   - AI 接口：永不拦截、永不缓存。
  *  升级版本：修改 CACHE 常量即可，会清掉旧缓存。
  * ========================================================================== */
-const CACHE = 'pinst-v2.5.0';
+const CACHE = 'pinst-v3.0.0';
 
 /* 需要"永远拿最新"的应用文件 */
 const APP_FILES = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest'];
 
 /* 可长期缓存的静态资源 */
 const STATIC_FILES = [
+  './assets/vendor/gsap.min.js',
   './assets/icon.svg',
   './assets/icon-192.png',
   './assets/icon-512.png',

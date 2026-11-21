@@ -2184,9 +2184,31 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
   // 快捷方式：直接打开记录提示词
   if(actionParam === 'new'){ setTimeout(()=>openEdit(), 120); }
 
-  // PWA：仅 http(s) 下注册 Service Worker
+  // PWA：注册 Service Worker，并让它"立刻"用上新版本
   if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', {updateViaCache:'none'}).then(reg=>{
+      // 主动检查更新
+      reg.update().catch(()=>{});
+      // 发现新版本 → 让它立即接管
+      reg.addEventListener('updatefound', ()=>{
+        const sw = reg.installing;
+        if(!sw) return;
+        sw.addEventListener('statechange', ()=>{
+          if(sw.state === 'installed' && navigator.serviceWorker.controller){
+            sw.postMessage('SKIP_WAITING');
+          }
+        });
+      });
+    }).catch(()=>{});
+
+    // 新版本接管后自动刷新一次（只在"之前已有旧版本"时刷新，避免首次安装就刷新）
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+      if(!hadController || reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
   }
 })();
 
@@ -2202,6 +2224,23 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
   const vv = window.visualViewport;
   const root = document.documentElement;
   if(!vv) return;
+
+  /*
+   * 用真实元素量出安全区底部高度。
+   * env(safe-area-inset-bottom) 在部分 iOS PWA 场景下取不到，
+   * 用一个探针 div 实际渲染出来量，比读 env() 可靠。
+   */
+  const probe = document.createElement('div');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText =
+    'position:fixed;left:0;bottom:0;width:1px;height:env(safe-area-inset-bottom,0px);' +
+    'pointer-events:none;visibility:hidden;z-index:-1';
+  document.body.appendChild(probe);
+
+  function safeAreaBottom(){
+    const h = probe.getBoundingClientRect().height;
+    return Number.isFinite(h) ? h : 0;
+  }
 
   let raf = 0;
   function update(){
@@ -2234,13 +2273,34 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
       dockEl.style.opacity = '';
       dockEl.style.pointerEvents = '';
     }
+
+    /*
+     * Tab 栏底部定位：直接写 px，不依赖 CSS 的 calc(env())。
+     * 悬浮间距固定 8px，加上实测的安全区高度。
+     * 桌面手机框模式下已经用 CSS 固定为 absolute + bottom，这里跳过。
+     */
+    if(!document.body.classList.contains('desktop-frame')){
+      dockEl.style.bottom = (safeAreaBottom() + 8).toFixed(0) + 'px';
+    }
   }
   const schedule = ()=>{ if(!raf) raf = requestAnimationFrame(update); };
   vv.addEventListener('resize', schedule, {passive:true});
   vv.addEventListener('scroll', schedule, {passive:true});
   window.addEventListener('resize', schedule, {passive:true});
   window.addEventListener('orientationchange', ()=>{ schedule(); setTimeout(schedule, 300); }, {passive:true});
+  // 首帧 + 稍后再确认一次（iOS PWA 启动时安全区可能延迟就绪）
   update();
+  setTimeout(update, 300);
+  setTimeout(update, 1000);
+})();
+
+/* 桌面手机框模式标记：命中媒体查询时给 body 加 class，
+   让 JS 不去覆盖 .tabdock 的 bottom（桌面端用 absolute 定位） */
+(function markDesktopFrame(){
+  const mq = matchMedia('(min-width: 760px) and (min-height: 700px)');
+  const sync = ()=> document.body.classList.toggle('desktop-frame', mq.matches);
+  sync();
+  mq.addEventListener?.('change', sync);
 })();
 
 /* 输入框聚焦时，滚动到可见区域（配合键盘收起 Tab 栏） */

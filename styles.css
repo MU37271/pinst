@@ -332,12 +332,14 @@ body { background: var(--bg); }
   overscroll-behavior-y: contain;
   /*
    * 顶部留白 = 安全区 + 紧凑标题栏 + 大标题占位（约 46px）+ 间隙
-   * 大标题是 absolute 定位的，必须由这里让出它的高度，否则内容会压上去
-   * 底部留白 = 安全区 + Tab 栏高度 + 10px 间距 + 呼吸位
-   * 让最后一张卡片能完整滚到 Tab 栏上方，不被遮住
+   * 大标题是 absolute 定位的，必须由这里让出它的高度，否则内容会压上去。
+   *
+   * 底部留白：只留「Tab 栏高度 + 10px 悬浮间距 + 8px 呼吸」，
+   * 不再叠加安全区（Tab 栏本身已经让出安全区了）。
+   * 这样滚到底时最后一张卡片刚好停在 Tab 栏上方，屏幕底部不会出现空白带。
    */
   padding: calc(var(--safe-t) + var(--titlebar-h) + 64px) var(--content-pad)
-    calc(var(--safe-b) + var(--tabbar-h) + 34px);
+    calc(var(--tabbar-h) + 18px);
   scrollbar-width: none;
 }
 .page > .page-spacer { height: 0; }

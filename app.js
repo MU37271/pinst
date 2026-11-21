@@ -62,17 +62,112 @@ function load(){
         state = Object.assign(state, d);
       }
     }
-    if(!state.modelConfigs || !state.modelConfigs.length){
+    // 兜底修复：老数据或缺字段时补齐，避免运行时崩在 undefined 上
+    state.prompts = Array.isArray(state.prompts) ? state.prompts : [];
+    state.gallery = Array.isArray(state.gallery) ? state.gallery : [];
+    state.categories = Array.isArray(state.categories) ? state.categories : [];
+    state.groups = Array.isArray(state.groups) ? state.groups : [];
+    state.history = Array.isArray(state.history) ? state.history : [];
+    state.prompts.forEach(p=>{
+      if(!Array.isArray(p.versions)) p.versions = [];
+      if(!Array.isArray(p.images)) p.images = [];
+      if(!Array.isArray(p.tags)) p.tags = [];
+    });
+    state.gallery.forEach(g=>{
+      if(!Array.isArray(g.imageKeys)) g.imageKeys = [];
+      if(!Array.isArray(g.tags)) g.tags = [];
+    });
+
+    if(!Array.isArray(state.modelConfigs) || !state.modelConfigs.length){
       state.modelConfigs = [{id:cid(), name:'默认配置', provider:state.settings.provider, baseUrl:state.settings.baseUrl, apiKey:state.settings.apiKey, model:state.settings.model, temperature:state.settings.temperature}];
       state.activeConfigId = state.modelConfigs[0].id;
     }
     if(!state.activeConfigId) state.activeConfigId = state.modelConfigs[0].id;
-  }catch(e){ console.warn('读取本地数据失败', e); }
+    // 当前配置可能已被删除，回落到第一个
+    if(!state.modelConfigs.some(c=>c.id===state.activeConfigId)){
+      state.activeConfigId = state.modelConfigs[0].id;
+    }
+  }catch(e){
+    console.warn('读取本地数据失败', e);
+    // 数据损坏时不要静默清空，提示用户先导出/备份
+    setTimeout(()=>toast('本地数据读取异常，建议先导出备份'), 1200);
+  }
 }
+/* ============================================================
+ * 本地持久化
+ * ------------------------------------------------------------------
+ * iOS Safari / 主屏 PWA 的坑：
+ *   1) localStorage 写入可能因容量（约 5MB）静默失败 → 必须校验回读
+ *   2) 主屏 App 每次启动被当作新会话，未持久化的写入可能丢失 → 立即同步落盘
+ *   3) 图片一律存 IndexedDB（体积大），state 里只保存 key
+ * 因此 persist() 做了三件事：同步写入 → 回读校验 → 失败时明确报错。
+ * ============================================================ */
 function persist(){
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-  catch(e){ toast('本地空间不足，建议减少案例图片或导出备份'); console.warn(e); }
+  let json;
+  try{ json = JSON.stringify(state); }
+  catch(e){ toast('数据序列化失败：' + e.message); return false; }
+
+  try{
+    localStorage.setItem(STORE_KEY, json);
+  }catch(e){
+    // 容量不足：先尝试清理历史版本等可牺牲数据
+    const reclaimed = reclaimSpace();
+    if(reclaimed){
+      try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+      catch(e2){ reportStorageFailure(e2, json.length); return false; }
+    }else{
+      reportStorageFailure(e, json.length);
+      return false;
+    }
+  }
+
+  // 回读校验：确认真的写进去了（iOS 上这是唯一可靠的验证方式）
+  try{
+    const check = localStorage.getItem(STORE_KEY);
+    if(!check || check.length !== json.length){
+      reportStorageFailure(new Error('写入后校验不一致'), json.length);
+      return false;
+    }
+  }catch(e){ /* 读失败不阻断，写入本身已成功 */ }
+
+  return true;
 }
+
+/** 容量不足时尝试回收：清空历史版本、AI 历史、过期的旧 key */
+function reclaimSpace(){
+  let freed = false;
+  try{
+    // 1. 清掉更早版本的遗留 key
+    ['prompt_workbench_v2','prompt_workbench_v1'].forEach(k=>{
+      if(localStorage.getItem(k)){ localStorage.removeItem(k); freed = true; }
+    });
+    // 2. 精简历史版本（只保留最近 3 个）
+    (state.prompts||[]).forEach(p=>{
+      if((p.versions||[]).length > 3){ p.versions = p.versions.slice(0,3); freed = true; }
+    });
+    // 3. AI 分析历史只保留最近 10 条
+    if((state.history||[]).length > 10){ state.history = state.history.slice(0,10); freed = true; }
+  }catch(e){}
+  return freed;
+}
+
+function reportStorageFailure(err, size){
+  const kb = (size/1024).toFixed(1);
+  console.warn('持久化失败', err, '数据大小', kb + 'KB');
+  toast(`保存失败：本地存储已满（${kb}KB）。请到「我的 → 导出备份」后清理部分数据`);
+}
+
+/** 立即同步写入一次（用于页面隐藏/关闭前的兜底） */
+function persistNow(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }catch(e){}
+}
+
+// 页面被挂起/关闭前再写一次，防止 iOS 切后台时丢最后一次写入
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden') persistNow();
+});
+window.addEventListener('pagehide', persistNow);
+window.addEventListener('beforeunload', persistNow);
 
 /* ---- IndexedDB 图片仓库（原样） ---- */
 const DB_NAME='prompt_workbench_db', IMG_STORE='imgs';
@@ -843,7 +938,9 @@ async function savePrompt(){
   }else{
     state.prompts.push({id:cid(), ...data, isTemplate:false, useCount:0, quality:null, versions:[], lastUsedAt:null, createdAt:Date.now(), updatedAt:Date.now()});
   }
-  persist(); closeEdit(); renderLibrary(); toast('已保存');
+  const saved = persist();
+  closeEdit(); renderLibrary();
+  toast(saved ? '已保存' : '已保存到界面，但本地存储失败，请先导出备份');
 }
 
 function toggleFav(id){ const p=promptOf(id); p.favorite=!p.favorite; persist(); renderLibrary(); toast(p.favorite?'已收藏':'已取消收藏'); }
@@ -1238,9 +1335,17 @@ function saveModelConfig(){
     apiKey:$('mApiKey').value.trim(), model:$('mModel').value.trim(),
     temperature:Number($('mTemp').value)
   };
-  if(modelEditingId){ Object.assign(state.modelConfigs.find(x=>x.id===modelEditingId), cfg); }
-  else{ state.modelConfigs.push(cfg); if(!state.activeConfigId) state.activeConfigId=cfg.id; }
-  persist(); closeModelModal(); renderModelList(); renderProfileHero(); toast('配置已保存');
+  if(modelEditingId){
+    Object.assign(state.modelConfigs.find(x=>x.id===modelEditingId), cfg);
+  }else{
+    state.modelConfigs.push(cfg);
+    // 新增的配置直接设为当前：用户刚填完一套，显然是想用它
+    state.activeConfigId = cfg.id;
+  }
+  // 保存必须落盘成功才算成功，失败时明确告知
+  const saved = persist();
+  closeModelModal(); renderModelList(); renderProfileHero();
+  toast(saved ? '配置已保存并设为当前' : '配置已添加，但本地保存失败');
 }
 function activateConfig(id){ state.activeConfigId=id; persist(); renderModelList(); renderProfileHero(); toast('已切换当前模型'); }
 function deleteConfig(id){
@@ -1678,7 +1783,9 @@ function saveGallery(){
   }else{
     state.gallery.push({id:cid(), ...data, createdAt:Date.now(), updatedAt:Date.now()});
   }
-  persist(); closeGalleryEdit(); renderProfile(); toast('图集已保存');
+  const saved = persist();
+  closeGalleryEdit(); renderProfile();
+  toast(saved ? '图集已保存' : '图集已保存到界面，但本地存储失败，请先导出备份');
 }
 function deleteGallery(){
   if(!galleryEditingId) return;
@@ -2044,19 +2151,28 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
   let raf = 0;
   function update(){
     raf = 0;
-    // offsetBottom：真实视口底部到布局视口底部的距离（键盘占高）
-    const offsetBottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+    /*
+     * 键盘弹起的判定：
+     * 真实的"可视区底部" = vv.height + vv.offsetTop。
+     * 只有它明显小于 window.innerHeight 时才算键盘弹起。
+     * 阈值放宽到 150px，避免 iOS 工具栏高度变化被误判成键盘。
+     */
+    const visibleBottom = vv.height + vv.offsetTop;
+    const offsetBottom = Math.max(0, window.innerHeight - visibleBottom);
     root.style.setProperty('--vvb', offsetBottom.toFixed(1) + 'px');
-    root.style.setProperty('--vvh', vv.height.toFixed(1) + 'px');
-    // 键盘是否弹起：可视区明显矮于布局视口
-    const kb = offsetBottom > 120;
+
+    // 外壳高度：键盘弹起时收缩到可视区，否则用完整视口（保证贴底）
+    const kb = offsetBottom > 150;
     document.body.classList.toggle('kb-open', kb);
     if(kb){
-      // 键盘弹起时收起 Tab 栏，避免挡住输入框（iOS 原生的做法）
+      root.style.setProperty('--app-h', vv.height.toFixed(1) + 'px');
+      // 键盘弹起时收起 Tab 栏，避免挡住输入框（iOS 原生做法）
       dockEl.style.transform = 'translateX(-50%) translateY(140%)';
       dockEl.style.opacity = '0';
       dockEl.style.pointerEvents = 'none';
     }else{
+      // 清掉内联高度，交回 CSS 的 100dvh —— 这是贴底的关键
+      root.style.removeProperty('--app-h');
       dockEl.style.transform = '';
       dockEl.style.opacity = '';
       dockEl.style.pointerEvents = '';
@@ -2065,7 +2181,8 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
   const schedule = ()=>{ if(!raf) raf = requestAnimationFrame(update); };
   vv.addEventListener('resize', schedule, {passive:true});
   vv.addEventListener('scroll', schedule, {passive:true});
-  window.addEventListener('orientationchange', schedule, {passive:true});
+  window.addEventListener('resize', schedule, {passive:true});
+  window.addEventListener('orientationchange', ()=>{ schedule(); setTimeout(schedule, 300); }, {passive:true});
   update();
 })();
 

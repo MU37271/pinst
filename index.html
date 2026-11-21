@@ -85,32 +85,90 @@
 
     <!-- ========== 2. 拼装器 ========== -->
     <section class="page" id="viewBuilder" data-tab="1">
+
+      <!-- 人物 -->
       <div class="group" style="margin-top:2px">
         <div class="group-head">
-          <h3>模块拼装</h3>
-          <span style="font-size:12px;color:var(--ink-3)">留空自动跳过</span>
+          <h3>人物 / 主体</h3>
+          <span class="bsec-hint">留空自动跳过</span>
         </div>
         <div class="group-body">
-          <div class="field"><label>主体 / 人物</label><input id="bSubject" placeholder="如：一位短发年轻女性"></div>
-          <div class="field"><label>风格 / 画风</label><input id="bStyle" placeholder="如：CCD 复古、胶片质感"></div>
-          <div class="field"><label>光影</label><input id="bLight" placeholder="如：窗边逆光、柔和侧光"></div>
-          <div class="field"><label>构图 / 视角</label><input id="bComp" placeholder="如：半身像、平视、浅景深"></div>
-          <div class="field"><label>质感 / 细节</label><input id="bTex" placeholder="如：皮肤纹理、发丝清晰"></div>
-          <div class="field"><label>氛围 / 情绪</label><input id="bMood" placeholder="如：清冷、安静、故事感"></div>
-          <div class="field"><label>镜头 / 参数补充</label><input id="bLens" placeholder="如：35mm、f/1.8、暖色调"></div>
+          <div class="field"><label>主体</label><input id="bSubject" placeholder="如：一位年轻女性"></div>
+          <div class="field"><label>外貌 / 五官</label><input id="bAppear" placeholder="如：鹅蛋脸、杏眼、皮肤白皙、清冷气质"></div>
+          <div class="field"><label>发型 / 妆容</label><input id="bHair" placeholder="如：黑色长发半挽、伪素颜妆、细闪眼影"></div>
+          <div class="field" style="margin-bottom:0"><label>服装 / 配饰</label><input id="bCloth" placeholder="如：米白针织衫、细链项链、珍珠耳坠"></div>
+        </div>
+      </div>
+
+      <!-- 动作 / 表情 -->
+      <div class="group">
+        <div class="group-head"><h3>动作 / 表情</h3></div>
+        <div class="group-body">
+          <div class="field"><label>动作 / 姿态</label><input id="bAction" placeholder="如：侧身回眸、手指轻触锁骨的半身姿态"></div>
+          <div class="field" style="margin-bottom:0"><label>表情 / 眼神</label><input id="bExpr" placeholder="如：嘴角微扬、眼神平静看向镜头"></div>
+        </div>
+      </div>
+
+      <!-- 场景 -->
+      <div class="group">
+        <div class="group-head"><h3>场景 / 背景</h3></div>
+        <div class="group-body">
+          <div class="field"><label>背景</label><input id="bBg" placeholder="如：虚化的落地窗、晨雾街道、纯色影棚"></div>
+          <div class="field" style="margin-bottom:0"><label>环境元素 / 道具</label><input id="bProp" placeholder="如：窗边绿植、半透明纱帘、木质桌面"></div>
+        </div>
+      </div>
+
+      <!-- 画面表现 -->
+      <div class="group">
+        <div class="group-head"><h3>画面表现</h3></div>
+        <div class="group-body">
+          <div class="field"><label>光影</label><input id="bLight" placeholder="如：窗边逆光、柔和侧光、硬光"></div>
+          <div class="field"><label>色彩 / 色调</label><input id="bColor" placeholder="如：低饱和冷调、青绿柔粉、暖灰色系"></div>
+          <div class="field"><label>质感 / 细节</label><input id="bTex" placeholder="如：皮肤纹理、发丝清晰、胶片颗粒"></div>
+          <div class="field" style="margin-bottom:0"><label>氛围 / 情绪</label><input id="bMood" placeholder="如：清冷、安静、故事感"></div>
+        </div>
+      </div>
+
+      <!-- 相机 -->
+      <div class="group">
+        <div class="group-head"><h3>镜头 / 构图</h3></div>
+        <div class="group-body">
+          <div class="field"><label>构图 / 视角</label><input id="bComp" placeholder="如：半身像、平视、中心构图、大面积留白"></div>
+          <div class="field" style="margin-bottom:0"><label>镜头 / 参数</label><input id="bLens" placeholder="如：35mm、f/1.8、浅景深"></div>
+        </div>
+      </div>
+
+      <!-- 风格与版本 -->
+      <div class="group">
+        <div class="group-head"><h3>风格 / 版本</h3></div>
+        <div class="group-body">
+          <div class="field"><label>风格 / 画风</label><input id="bStyle" placeholder="如：CCD 复古、胶片质感、韩系伪厚涂"></div>
+          <div class="field"><label>生成模型 / 引擎</label><input id="bModel" placeholder="如：Midjourney v6、即梦、SDXL"></div>
+          <div class="field"><label>画幅比例</label><input id="bRatio" placeholder="如：3:4、16:9、1:1"></div>
           <div class="field" style="margin-bottom:0"><label>负面提示词</label><textarea id="bNeg" rows="2" placeholder="如：模糊、畸变、多余手指、低画质"></textarea></div>
         </div>
       </div>
 
+      <!-- 拼装结果 -->
       <div class="group">
-        <div class="group-head"><h3>拼装结果</h3></div>
+        <div class="group-head">
+          <h3>拼装结果</h3>
+          <button class="btn sm" onclick="assemble()">拼装</button>
+        </div>
         <div class="group-body builder-preview">
           <textarea id="bResult" readonly placeholder="填写上方模块后，点「拼装」生成完整提示词。"></textarea>
           <div class="builder-actions">
-            <button class="btn primary" onclick="assemble()">拼装</button>
-            <button class="btn" onclick="copyBuilder()">复制</button>
+            <button class="btn primary" onclick="copyBuilder()">复制</button>
+            <button class="btn" onclick="translateBuilder()">翻译</button>
             <button class="btn" onclick="saveBuilderToLib()">存入库</button>
             <button class="btn ghost" onclick="clearBuilder()">清空</button>
+          </div>
+          <div class="builder-trans-out hidden" id="bTransOut">
+            <div class="bt-head">
+              <span id="bTransLabel">译文</span>
+              <button class="btn sm" onclick="copyBuilderTrans()">复制译文</button>
+            </div>
+            <div class="bt-body" id="bTransText"></div>
           </div>
         </div>
       </div>
@@ -296,6 +354,23 @@
   <div class="actionsheet" id="actionSheet"></div>
 </div>
 
+<!-- ===== 弹层：提示词详情（独立面板，可滚动、顶部留白） ===== -->
+<div class="mask hidden detail-mask" id="detailMask" onclick="if(event.target===this)closeDetail()">
+  <div class="detail-sheet" id="detailSheet" role="dialog" aria-modal="true"></div>
+</div>
+
+<!-- ===== 图集查看器（左右滑动） ===== -->
+<div class="viewer hidden" id="viewer" role="dialog" aria-modal="true">
+  <div class="viewer-top">
+    <button class="viewer-btn" onclick="closeViewer()" aria-label="关闭">✕</button>
+    <div class="viewer-title" id="viewerTitle"></div>
+    <div class="viewer-count" id="viewerCount"></div>
+  </div>
+  <div class="viewer-track" id="viewerTrack"></div>
+  <div class="viewer-dots" id="viewerDots"></div>
+  <div class="viewer-caption" id="viewerCaption"></div>
+</div>
+
 <!-- ===== 弹层：排序 ===== -->
 <div class="mask hidden" id="sortMask" onclick="if(event.target===this)closeSortSheet()">
   <div class="actionsheet">
@@ -396,6 +471,11 @@
     <div class="modal-grabber" data-drag="versionMask"><i></i></div>
     <div class="modal-head"><h3>版本历史</h3><button class="icon-btn" onclick="closeVersion()" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <div class="modal-body" id="versionList"></div>
+    <div class="modal-foot">
+      <button class="btn danger" onclick="clearVersions()">清空全部版本</button>
+      <div class="grow"></div>
+      <button class="btn primary" onclick="closeVersion()">完成</button>
+    </div>
   </div>
 </div>
 

@@ -184,13 +184,22 @@ a { color: inherit; text-decoration: none; }
 .app-shell {
   position: relative;
   z-index: 1;
-  height: 100dvh;
+  /*
+   * 视口高度：优先 svh（最小视口高度，地址栏展开时的稳定值）。
+   * 不能用 100dvh —— iOS Safari 在软键盘/工具栏收缩时 dvh 会跳变，
+   * 绝对定位的底部元素就会"浮"到半空（Tab 栏上移的根因）。
+   */
+  height: 100vh;
+  height: 100svh;
   width: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: transparent;
+  transition: height .2s var(--ease-ios);
 }
+/* 键盘弹出时由 JS 设置 --vvh，让外壳跟着真实可视区（不影响布局稳定性） */
+body.kb-open .app-shell { height: var(--vvh, 100svh); }
 
 /* ---- 沉浸式状态栏 & 大标题栏 ---- */
 .topbar {
@@ -325,9 +334,16 @@ a { color: inherit; text-decoration: none; }
 /* ===================== 4. 液态玻璃 Tab 栏 ===================== */
 /* 悬浮在底部、不与屏幕边缘相接（iOS 26 起的浮岛式 Tab 栏） */
 .tabdock {
-  position: absolute;
+  /*
+   * 关键：用 fixed 而不是 absolute。
+   * absolute 依附于 .app-shell 的高度，一旦外壳高度与真实视口不同步
+   * （iOS 键盘、地址栏收缩、dvh 抖动），Tab 栏就会离开底部。
+   * fixed 直接锚定视口；下方 --vvb 由 visualViewport 动态写入，
+   * 键盘弹起时会自动贴到键盘上沿而不是被顶到半空。
+   */
+  position: fixed;
   left: 50%;
-  bottom: calc(var(--safe-b) + 10px);
+  bottom: calc(var(--vvb, 0px) + var(--safe-b) + 10px);
   z-index: 40;
   transform: translateX(-50%);
   width: min(400px, calc(100vw - 32px));
@@ -577,6 +593,18 @@ body.searching .topbar-inner { transition: opacity .12s; }
   width: 76px; height: 76px; flex: none; object-fit: cover;
   border-radius: var(--r-sm); cursor: zoom-in;
   transition: transform var(--dur-mid) var(--ease-out);
+}
+/* 卡片缩略图容器：承载「作品」角标 */
+.card-thumb-wrap { position: relative; flex: none; width: 76px; height: 76px; }
+.card-thumb-wrap img { width: 100%; height: 100%; }
+.card-thumb-wrap .thumb-tag {
+  position: absolute; left: 5px; bottom: 5px;
+  font-style: normal; font-size: 10px; font-weight: 600;
+  padding: 1px 6px; border-radius: var(--r-pill);
+  color: #fff; background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  letter-spacing: .02em;
 }
 .card-imgs img:active { transform: scale(1.03); }
 .card-body { padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 7px; }
@@ -980,6 +1008,176 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .as-cancel:active { background: var(--fill-2); }
 
+/* ============ 详情面板（点击卡片）：内容可滚动 + 顶部留白 ============ */
+/*
+ * 之前的问题：内容区和底部按钮共用同一块滚动容器，且贴着遮罩顶部，
+ * 滚动时文字会被顶部模糊吃掉。
+ * 现在拆成「可滚动的内容区」+「固定的操作栏」，内容区顶部留出
+ * 一段渐隐空间，第一行永远清晰可读。
+ */
+.detail-mask { align-items: flex-end; }
+.detail-sheet {
+  width: 100%;
+  max-width: 560px;
+  max-height: 86svh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  background: var(--bg-elev);
+  box-shadow: 0 -12px 60px -24px rgba(0, 0, 0, .5), inset 0 .5px 0 var(--glass-rim);
+  animation: sheetIn .4s var(--ease-spring);
+  overflow: hidden;
+  margin: 0 auto;
+}
+.detail-head {
+  flex: none;
+  padding: 10px 18px 12px;
+  position: relative;
+}
+.detail-grab { display: flex; justify-content: center; padding: 2px 0 10px; }
+.detail-grab i { width: 38px; height: 5px; border-radius: 3px; background: var(--ink-4); opacity: .5; }
+.detail-title {
+  font-size: 19px; font-weight: 700; letter-spacing: -.025em;
+  line-height: 1.3; padding-right: 40px;
+}
+.detail-sub { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.detail-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--fill-2); color: var(--ink-2);
+  display: grid; place-items: center; font-size: 14px;
+}
+.detail-close:active { background: var(--fill-3); }
+
+/* 可滚动内容：上下各留一段渐隐，避免文字被顶/底边缘切掉 */
+.detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 0 18px 16px;
+  scroll-padding-top: 16px;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+.detail-text {
+  font-size: 15px; line-height: 1.7; white-space: pre-wrap;
+  color: var(--ink); padding-top: 4px;
+}
+.detail-block {
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--fill-1); border-radius: var(--r-sm);
+  font-size: 13.5px; color: var(--ink-2); line-height: 1.6;
+}
+.detail-block b { display: block; font-size: 12px; color: var(--ink-3); font-weight: 600; margin-bottom: 4px; }
+.detail-imgs {
+  display: flex; gap: 8px; margin-top: 14px; overflow-x: auto;
+  padding-bottom: 4px; scrollbar-width: none;
+}
+.detail-imgs::-webkit-scrollbar { display: none; }
+.detail-imgs img {
+  width: 92px; height: 92px; flex: none; object-fit: cover;
+  border-radius: var(--r-sm); cursor: zoom-in;
+}
+.detail-foot {
+  flex: none;
+  display: flex; gap: 8px;
+  padding: 10px 16px calc(10px + var(--safe-b));
+  border-top: .5px solid var(--sep);
+  background: var(--bg-elev);
+}
+.detail-foot .btn { flex: 1; height: 46px; }
+
+/* ============ 图集查看器：左右滑动 ============ */
+.viewer {
+  position: fixed; inset: 0; z-index: 95;
+  background: rgba(6, 6, 8, .96);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  display: flex; flex-direction: column;
+  animation: fadeIn .22s var(--ease-ios);
+  padding-top: var(--safe-t);
+  padding-bottom: var(--safe-b);
+  color: #fff;
+}
+.viewer-top {
+  flex: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px 6px;
+}
+.viewer-btn {
+  width: 36px; height: 36px; flex: none;
+  border-radius: 50%; color: #fff; font-size: 16px;
+  background: rgba(255, 255, 255, .12);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  display: grid; place-items: center;
+}
+.viewer-btn:active { background: rgba(255, 255, 255, .22); }
+.viewer-title {
+  flex: 1; min-width: 0; font-size: 15px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.viewer-count {
+  flex: none; font-size: 13px; color: rgba(255, 255, 255, .7);
+  font-variant-numeric: tabular-nums;
+  padding: 4px 10px; border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, .12);
+}
+/* 横向滑动轨道：每张占满一屏 */
+.viewer-track {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.viewer-track::-webkit-scrollbar { display: none; }
+.viewer-slide {
+  flex: none;
+  width: 100%;
+  height: 100%;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  display: grid;
+  place-items: center;
+  padding: 8px 16px;
+}
+.viewer-slide img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  box-shadow: 0 20px 60px -20px rgba(0, 0, 0, .8);
+  transition: transform .2s var(--ease-out);
+}
+.viewer-dots {
+  flex: none;
+  display: flex; justify-content: center; gap: 6px;
+  padding: 10px 0 2px;
+  min-height: 22px;
+}
+.viewer-dots i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255, 255, 255, .3);
+  transition: background-color .2s, width .25s var(--ease-spring);
+}
+.viewer-dots i.on { background: #fff; width: 18px; border-radius: 3px; }
+.viewer-caption {
+  flex: none;
+  padding: 4px 20px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .62);
+  text-align: center;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
 /* Toast：液态玻璃胶囊 */
 .toast {
   position: fixed;
@@ -1088,7 +1286,34 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .builder-preview textarea:focus { border-color: var(--ink); }
 .builder-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-.builder-actions .btn { flex: 1; min-width: 90px; }
+.builder-actions .btn { flex: 1; min-width: 80px; }
+.bsec-hint { font-size: 12px; color: var(--ink-3); }
+
+/* 拼装器：翻译结果 */
+.builder-trans-out {
+  margin-top: 12px;
+  border-radius: var(--r-md);
+  background: var(--fill-1);
+  border: .5px solid var(--sep);
+  overflow: hidden;
+  animation: enterUp .3s var(--ease-spring) both;
+}
+.builder-trans-out .bt-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px;
+  border-bottom: .5px solid var(--sep);
+  font-size: 12px; font-weight: 600; color: var(--ink-3);
+}
+.builder-trans-out .bt-head span { flex: 1; letter-spacing: .04em; text-transform: uppercase; }
+.builder-trans-out .bt-body {
+  padding: 12px 14px;
+  font-size: 14px; line-height: 1.65;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow-y: auto;
+}
 
 /* 个人中心 hero */
 .profile-hero {
@@ -1140,6 +1365,21 @@ input[type="range"]::-webkit-slider-thumb {
   background: rgba(0, 0, 0, .55); color: #fff; -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
+/* 相册卡片右上角编辑按钮 */
+.album-edit {
+  position: absolute; top: 6px; right: 6px;
+  width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: #fff;
+  background: rgba(0, 0, 0, .45);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .35);
+  opacity: .92;
+  transition: transform var(--dur-fast) var(--ease-spring), opacity var(--dur-fast);
+}
+.album-edit svg { width: 15px; height: 15px; }
+.album-edit:active { transform: scale(.88); }
 .album-body { padding: 9px 11px 11px; }
 .album-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .album-meta { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

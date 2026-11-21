@@ -464,17 +464,34 @@ function renderLibrary(){
   grid.innerHTML = list.map((p, idx)=>{
     const c = catOf(p.categoryId);
     const lv = p.level||0;
-    const stars = '★'.repeat(lv) + '☆'.repeat(5-lv);
     const starsHtml = `<span class="stars" title="掌握程度">${'★'.repeat(lv)}<span class="off">${'☆'.repeat(5-lv)}</span></span>`;
-    const imgs = (p.images||[]).map(src=>{ const u=imgSrc(src); return u?`<img src="${u}" alt="" loading="lazy" onclick="event.stopPropagation();openLightbox('${u}')">`:''; }).join('');
+    /*
+     * 图片区合并两类来源：
+     *   1) 提示词自带的案例图（p.images）
+     *   2) 相册里关联到这条提示词的作品（gallery[].promptId）
+     * 两者去重后一起展示；关联作品加「作品」角标以示区分。
+     */
+    const ownImgs = (p.images||[]).map(s=>imgSrc(s)).filter(Boolean);
+    const linkedGalleries = state.gallery.filter(g=>g.promptId===p.id);
+    const linkedImgs = linkedGalleries.flatMap(g=>(g.imageKeys||[]).map(k=>imgGet(k)).filter(Boolean));
+    const cardImgs = [...new Set([...ownImgs, ...linkedImgs])];
+    const linkedCount = linkedImgs.length;
+    // 点击任意图片 → 打开可左右滑动的查看器
+    const imgsHtml = cardImgs.map((u,i)=>`
+      <div class="card-thumb-wrap">
+        <img src="${u}" alt="" loading="lazy" data-vi="${i}"
+             onclick="event.stopPropagation();openCardViewer('${p.id}',${i})">
+        ${i >= ownImgs.length ? '<i class="thumb-tag">作品</i>' : ''}
+      </div>`).join('');
     const params = [];
     if(p.ratio) params.push(`比例 ${esc(p.ratio)}`);
     if(p.genModel) params.push(`模型 ${esc(p.genModel)}`);
     if(p.seed) params.push(`Seed ${esc(p.seed)}`);
+    if(linkedCount) params.push(`作品 ${linkedCount} 张`);
     const vars = extractVars(p.text);
     const q = p.quality && QUALITY[p.quality];
     return `<div class="card ${p.pinned?'pinned':''}" data-id="${p.id}" style="animation-delay:${Math.min(idx,8)*26}ms">
-      ${imgs?`<div class="card-imgs">${imgs}</div>`:''}
+      ${imgsHtml?`<div class="card-imgs">${imgsHtml}</div>`:''}
       <div class="card-body">
         <div class="card-head">
           <div class="card-title">${esc(p.title)}</div>
@@ -541,6 +558,9 @@ function bindCardGestures(){
  * 5. 卡片动作面板 / 详情
  * ============================================================ */
 let actionTargetId = null;
+
+/* 图集查看器状态（放前面，openDetail 会写入暂存数据） */
+const viewerState = {list: [], index: 0, title: '', caption: '', detailList: [], detailTitle: ''};
 function openActionSheet(id){
   const p = promptOf(id); if(!p) return;
   actionTargetId = id;
@@ -567,39 +587,139 @@ function openActionSheet(id){
 function closeActionSheet(){ $('actionMask').classList.add('hidden'); }
 function togglePin(id){ const p = promptOf(id); if(!p) return; p.pinned = !p.pinned; p.updatedAt = Date.now(); persist(); renderLibrary(); toast(p.pinned?'已置顶':'已取消置顶'); }
 
-/* 详情：底部 Sheet（点击卡片） */
+/* 详情：底部面板（点击卡片）。内容区独立滚动，顶部留白避免被遮挡 */
 function openDetail(id){
   const p = promptOf(id); if(!p) return;
   const c = catOf(p.categoryId);
-  const imgs = (p.images||[]).map(s=>imgSrc(s)).filter(Boolean);
   const lv = p.level||0;
-  $('actionSheet').innerHTML = `
-    <div class="as-group" style="max-height:72dvh;overflow:auto">
-      <div class="as-head" style="text-align:left;padding:16px 18px 6px">
-        <div class="t" style="font-size:17px;letter-spacing:-.02em">${esc(p.title)}</div>
-        <div class="s">${c?esc(c.name):'未分类'} · ${fmtTime(p.updatedAt)} · 用过 ${p.useCount||0} 次</div>
-      </div>
-      <div style="padding:6px 18px 14px">
-        ${imgs.length?`<div class="card-imgs" style="padding:0 0 10px">${imgs.map(u=>`<img src="${u}" onclick="openLightbox('${u}')">`).join('')}</div>`:''}
-        <div style="font-size:14.5px;line-height:1.6;white-space:pre-wrap;color:var(--ink-2)">${esc(p.text)}</div>
-        ${p.negative?`<div style="margin-top:10px;font-size:13px;color:var(--ink-3)">负面：${esc(p.negative)}</div>`:''}
-        ${p.note?`<div style="margin-top:10px;font-size:13px;color:var(--ink-3)">备注：${esc(p.note)}</div>`:''}
-        <div class="meta-row" style="margin-top:12px">
-          <span>${'★'.repeat(lv)}${'☆'.repeat(5-lv)}</span>
-          ${p.ratio?`<span>比例 ${esc(p.ratio)}</span>`:''}
-          ${p.genModel?`<span>模型 ${esc(p.genModel)}</span>`:''}
-          ${p.seed?`<span>Seed ${esc(p.seed)}</span>`:''}
-          ${(p.tags||[]).map(t=>`<span>#${esc(t)}</span>`).join('')}
-        </div>
+  // 关联作品：相册里挂了这条提示词的图集
+  const linked = state.gallery.filter(g=>g.promptId===id);
+  const linkedImgs = linked.flatMap(g=>(g.imageKeys||[]).map(k=>imgGet(k)).filter(Boolean));
+  // 提示词自带的案例图 + 关联作品图，合并成一个可滑动的列表
+  const ownImgs = (p.images||[]).map(s=>imgSrc(s)).filter(Boolean);
+  const allImgs = [...new Set([...ownImgs, ...linkedImgs])];
+  // 暂存给查看器（openViewerAt 读取）
+  viewerState.detailList = allImgs;
+  viewerState.detailTitle = p.title;
+
+  $('detailSheet').innerHTML = `
+    <div class="detail-head">
+      <div class="detail-grab"><i></i></div>
+      <button class="detail-close" onclick="closeDetail()" aria-label="关闭">✕</button>
+      <div class="detail-title">${esc(p.title)}</div>
+      <div class="detail-sub">${c?esc(c.name):'未分类'} · ${fmtTime(p.updatedAt)} · 用过 ${p.useCount||0} 次</div>
+    </div>
+    <div class="detail-scroll">
+      <div class="detail-text">${esc(p.text)}</div>
+      ${allImgs.length?`
+        <div class="detail-imgs">
+          ${allImgs.map((u,i)=>`<img src="${u}" alt="" loading="lazy" data-vi="${i}" onclick="openViewerAt(${i})">`).join('')}
+        </div>`:''}
+      ${p.negative?`<div class="detail-block"><b>负面提示词</b>${esc(p.negative)}</div>`:''}
+      ${p.note?`<div class="detail-block"><b>备注 / 心得</b>${esc(p.note)}</div>`:''}
+      ${linked.length?`<div class="detail-block"><b>关联作品（${linked.length} 组 / ${linkedImgs.length} 张）</b>${linked.map(g=>esc(g.title)).join('、')}</div>`:''}
+      <div class="meta-row" style="margin-top:14px">
+        <span>${'★'.repeat(lv)}${'☆'.repeat(5-lv)}</span>
+        ${p.ratio?`<span>比例 ${esc(p.ratio)}</span>`:''}
+        ${p.genModel?`<span>模型 ${esc(p.genModel)}</span>`:''}
+        ${p.seed?`<span>Seed ${esc(p.seed)}</span>`:''}
+        ${(p.tags||[]).map(t=>`<span>#${esc(t)}</span>`).join('')}
       </div>
     </div>
-    <div class="as-group">
-      <button class="as-item" onclick="closeActionSheet();copyPrompt('${id}')"><span class="ico">${I.copy}</span>复制提示词</button>
-      <button class="as-item" onclick="closeActionSheet();openActionSheet('${id}')"><span class="ico">⋯</span>更多操作</button>
-    </div>
-    <button class="as-cancel" onclick="closeActionSheet()">关闭</button>`;
-  $('actionMask').classList.remove('hidden');
+    <div class="detail-foot">
+      <button class="btn" onclick="closeDetail();openActionSheet('${id}')">更多</button>
+      <button class="btn primary" onclick="copyPrompt('${id}')">复制提示词</button>
+    </div>`;
+  $('detailMask').classList.remove('hidden');
 }
+function closeDetail(){ $('detailMask').classList.add('hidden'); }
+
+/* ============ 图集查看器：左右滑动浏览 ============ */
+/** 打开查看器（任意图片列表） */
+function openViewer(list, index = 0, title = '', caption = ''){
+  if(!list || !list.length) return;
+  viewerState.list = list.slice();
+  viewerState.index = Math.max(0, Math.min(list.length - 1, index));
+  viewerState.title = title || '';
+  viewerState.caption = caption || '';
+  renderViewer();
+  $('viewer').classList.remove('hidden');
+  requestAnimationFrame(()=>{
+    const track = $('viewerTrack');
+    track.scrollLeft = viewerState.index * track.clientWidth;
+  });
+}
+
+/** 从详情面板的缩略图打开：数据在最近一次 openDetail 里暂存 */
+function openViewerAt(i){
+  openViewer(viewerState.detailList, i, viewerState.detailTitle, '');
+}
+
+/** 从提示词卡片的图片打开：现场收集该提示词的全部图片 */
+function openCardViewer(promptId, i){
+  const p = promptOf(promptId); if(!p) return;
+  const ownImgs = (p.images||[]).map(s=>imgSrc(s)).filter(Boolean);
+  const linkedGalleries = state.gallery.filter(g=>g.promptId===promptId);
+  const linkedImgs = linkedGalleries.flatMap(g=>(g.imageKeys||[]).map(k=>imgGet(k)).filter(Boolean));
+  const list = [...new Set([...ownImgs, ...linkedImgs])];
+  openViewer(list, i, p.title, list.length > 1 ? '左右滑动查看' : '');
+}
+
+/** 从相册封面打开整组作品 */
+function openGalleryViewer(galleryId, i = 0){
+  const g = state.gallery.find(x=>x.id===galleryId); if(!g) return;
+  const list = (g.imageKeys||[]).map(k=>imgGet(k)).filter(Boolean);
+  const caption = [g.note, (g.tags||[]).map(t=>'#'+t).join(' ')].filter(Boolean).join(' · ');
+  openViewer(list, i, g.title, caption);
+}
+
+function renderViewer(){
+  const {list, index, title} = viewerState;
+  $('viewerTitle').textContent = title;
+  $('viewerCount').textContent = `${index+1} / ${list.length}`;
+  $('viewerCaption').textContent = viewerState.caption || '';
+  $('viewerTrack').innerHTML = list.map((u,i)=>`
+    <div class="viewer-slide"><img src="${u}" alt="" data-index="${i}"></div>`).join('');
+  $('viewerDots').innerHTML = list.map((_,i)=>`<i class="${i===index?'on':''}"></i>`).join('');
+}
+
+function closeViewer(){ $('viewer').classList.add('hidden'); }
+
+/* 查看器滑动的索引同步（只绑定一次） */
+(function bindViewer(){
+  let raf = 0;
+  const track = $('viewerTrack');
+  if(!track) return;
+  track.addEventListener('scroll', ()=>{
+    if(raf) return;
+    raf = requestAnimationFrame(()=>{
+      raf = 0;
+      const w = track.clientWidth || 1;
+      const i = Math.round(track.scrollLeft / w);
+      if(i === viewerState.index) return;
+      viewerState.index = i;
+      $('viewerCount').textContent = `${i+1} / ${viewerState.list.length}`;
+      [...$('viewerDots').children].forEach((d,k)=>d.classList.toggle('on', k===i));
+    });
+  }, {passive:true});
+
+  // 键盘：左右切换、Esc 关闭
+  document.addEventListener('keydown', e=>{
+    if($('viewer').classList.contains('hidden')) return;
+    if(e.key === 'Escape') closeViewer();
+    if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+      const w = track.clientWidth || 1;
+      const i = Math.max(0, Math.min(viewerState.list.length-1,
+        viewerState.index + (e.key === 'ArrowRight' ? 1 : -1)));
+      track.scrollTo({left: i * w, behavior:'smooth'});
+    }
+  });
+
+  // 桌面端：点击空白处关闭
+  $('viewer').addEventListener('click', e=>{
+    if(e.target === $('viewer') || e.target.classList.contains('viewer-slide')) closeViewer();
+  });
+})();
 
 /* ============================================================
  * 6. 卡片编辑（原逻辑）
@@ -840,7 +960,8 @@ function openVersion(id){
         <div class="v-head">
           ${v.current?'<span class="badge solid">当前</span>':'<span class="badge">历史</span>'}
           <span class="v-time">${fmtTime(v.createdAt)}</span>
-          ${v.current?'':`<button class="btn sm" onclick="rollbackVersion(${i-1})">回滚到此版</button>`}
+          ${v.current?'':`<button class="btn sm" onclick="rollbackVersion(${i-1})">回滚</button>
+            <button class="icon-btn" style="width:30px;height:30px;color:var(--ink-3)" title="删除此版本" onclick="deleteVersion(${i-1})">${I.trash}</button>`}
         </div>
         <div class="v-text">${esc(v.text)}</div>
         ${v.note?`<div class="v-text" style="color:var(--ink-3);margin-top:4px">备注：${esc(v.note)}</div>`:''}
@@ -857,6 +978,28 @@ function rollbackVersion(idx){
   p.versions.unshift({text:p.text, note:p.note||'', createdAt:Date.now()});
   p.text = v.text; p.note = v.note||''; p.updatedAt = Date.now();
   persist(); closeVersion(); renderLibrary(); toast('已回滚');
+}
+/* 删除单个历史版本（不能删"当前"版本，那个走回滚覆盖） */
+function deleteVersion(idx){
+  const p = promptOf(versionId); if(!p) return;
+  const v = (p.versions||[])[idx]; if(!v) return;
+  const preview = String(v.text||'').slice(0,40).replace(/\s+/g,' ');
+  if(!confirm(`删除这个历史版本？\n\n${preview}…\n\n删除后不可恢复。`)) return;
+  p.versions.splice(idx, 1);
+  persist();
+  openVersion(versionId);   // 重新渲染列表
+  toast('已删除该版本');
+}
+/* 清空全部历史版本 */
+function clearVersions(){
+  const p = promptOf(versionId); if(!p) return;
+  const n = (p.versions||[]).length;
+  if(!n) return;
+  if(!confirm(`删除全部 ${n} 个历史版本？当前正文会保留，仅清空历史。`)) return;
+  p.versions = [];
+  persist();
+  openVersion(versionId);
+  toast('历史版本已清空');
 }
 
 /* ============================================================
@@ -896,18 +1039,55 @@ function replaceByTrans(){
 /* ============================================================
  * 11. 拼装器
  * ============================================================ */
-function assemble(){
-  const parts = [
-    $('bSubject').value.trim(), $('bStyle').value.trim(), $('bLight').value.trim(),
-    $('bComp').value.trim(), $('bTex').value.trim(), $('bMood').value.trim(), $('bLens').value.trim()
-  ].filter(Boolean);
-  const neg = $('bNeg').value.trim();
-  let out = parts.join(', ');
-  if(neg) out += `\nNegative prompt: ${neg}`;
-  $('bResult').value = out;
-  if(!out){ toast('先填写至少一个模块'); return; }
-  toast('已拼装');
+/*
+ * 字段顺序决定拼装出来的语序。按「先是谁 → 在做什么 → 在哪 → 什么光 → 什么质感 → 怎么拍」
+ * 组织，这最接近提示词模型理解画面的习惯。
+ */
+const BUILD_FIELDS = [
+  ['bSubject', '主体'],
+  ['bAppear',  '外貌'],
+  ['bHair',    '发型妆容'],
+  ['bCloth',   '服装配饰'],
+  ['bAction',  '动作姿态'],
+  ['bExpr',    '表情眼神'],
+  ['bBg',      '背景'],
+  ['bProp',    '环境元素'],
+  ['bLight',   '光影'],
+  ['bColor',   '色调'],
+  ['bTex',     '质感细节'],
+  ['bMood',    '氛围'],
+  ['bComp',    '构图'],
+  ['bLens',    '镜头'],
+  ['bStyle',   '风格'],
+  ['bModel',   '模型'],
+  ['bRatio',   '比例'],
+];
+
+/** 收集已填写的模块，返回 [{label, value}] */
+function collectBuilderParts(){
+  return BUILD_FIELDS
+    .map(([id, label])=>({label, value: ($(id)?.value || '').trim()}))
+    .filter(x=>x.value);
 }
+
+/** 拼装成品文本（不含负面） */
+function buildPromptText(parts, neg){
+  let out = parts.map(p=>p.value).join(', ');
+  if(neg) out += `\nNegative prompt: ${neg}`;
+  return out;
+}
+
+function assemble(){
+  const parts = collectBuilderParts();
+  const neg = $('bNeg').value.trim();
+  const out = buildPromptText(parts, neg);
+  $('bResult').value = out;
+  // 改动后旧译文作废
+  $('bTransOut').classList.add('hidden');
+  if(!out){ toast('先填写至少一个模块'); return; }
+  toast(`已拼装 ${parts.length} 个模块`);
+}
+
 function copyBuilder(){
   const v = $('bResult').value.trim();
   if(!v){ toast('还没有拼装结果'); return; }
@@ -920,7 +1100,81 @@ function saveBuilderToLib(){
   openEdit(null, {text:v, negative:neg, categoryId:state.ui.activeCat!=='all'?state.ui.activeCat:null, title:$('bSubject').value.trim()||'拼装提示词'});
 }
 function clearBuilder(){
-  ['bSubject','bStyle','bLight','bComp','bTex','bMood','bLens','bNeg','bResult'].forEach(id=>{ const el=$(id); if(el) el.value=''; });
+  BUILD_FIELDS.forEach(([id])=>{ const el=$(id); if(el) el.value=''; });
+  ['bNeg','bResult'].forEach(id=>{ const el=$(id); if(el) el.value=''; });
+  $('bTransOut').classList.add('hidden');
+  $('bTransText').textContent = '';
+  toast('已清空');
+}
+
+/* ---- 拼装器翻译：中 → 英 / 英 → 中，逐模块翻，保留结构 ---- */
+let lastBuilderTrans = '';
+function detectLang(text){
+  const cjk = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  return cjk > text.replace(/\s/g,'').length * 0.15 ? 'zh' : 'en';
+}
+
+async function translateBuilder(){
+  const parts = collectBuilderParts();
+  if(!parts.length){ toast('先填写至少一个模块'); return; }
+  const cfg = getActiveConfig();
+  if(!cfg?.model){ toast('请先在「我的」里配置模型'); return; }
+
+  // 若还没拼装，先拼
+  if(!$('bResult').value.trim()) assemble();
+
+  const neg = $('bNeg').value.trim();
+  const srcText = parts.map(p=>p.value).join(', ');
+  const toEn = detectLang(srcText) === 'zh';
+
+  const out = $('bTransOut');
+  const body = $('bTransText');
+  out.classList.remove('hidden');
+  $('bTransLabel').textContent = toEn ? 'English' : '中文';
+  body.innerHTML = '<span style="color:var(--ink-3)">翻译中…</span>';
+
+  // 按模块翻译，保证输出能一一对应回填
+  const lines = parts.map((p,i)=>`${i+1}. [${p.label}] ${p.value}`).join('\n');
+  const system = toEn
+    ? '你是 AI 绘图提示词翻译。把用户给出的每个"编号 + [模块名] + 内容"逐条翻译为地道的英文绘图提示词，保持编号和 [模块名] 不变，只翻译内容。专有名词、镜头参数（如 35mm、f/1.8）、比例（如 3:4）保持原样。只输出翻译结果，每行一条，不要额外解释。'
+    : '你是 AI 绘图提示词翻译。把用户给出的每个"编号 + [模块名] + 内容"逐条翻译为简洁的中文，保持编号和 [模块名] 不变，只翻译内容。专有名词、镜头参数（如 35mm、f/1.8）、比例（如 3:4）保持原样。只输出翻译结果，每行一条，不要额外解释。';
+
+  try{
+    const res = await callAI(system, lines);
+    // 解析回模块，避免模型排版差异导致错位
+    const map = {};
+    String(res).split('\n').forEach(line=>{
+      const m = line.match(/^\s*(\d+)[.、)]\s*(?:\[[^\]]*\]\s*)?(.*)$/);
+      if(m) map[Number(m[1])] = m[2].trim();
+    });
+    const translated = parts.map((p,i)=>{
+      const v = map[i+1] || p.value;
+      return v;
+    });
+    const clean = translated.map(t=>t.replace(/[\r\n]+/g,' ').trim()).filter(Boolean);
+    let text = clean.join(', ');
+    if(neg){
+      let negT = neg;
+      const negLine = String(res).split('\n').find(l=>/negative|负面/i.test(l));
+      if(toEn && negLine){
+        negT = negLine.replace(/^.*?(negative prompt|负面提示词)\s*[:：]?\s*/i,'').trim() || neg;
+      }
+      text += `\nNegative prompt: ${negT}`;
+    }
+    lastBuilderTrans = text;
+    body.textContent = text;
+    body.style.whiteSpace = 'pre-wrap';
+    body.style.color = 'var(--ink)';
+  }catch(err){
+    body.innerHTML = `<span style="color:#b03a3a">翻译失败：${esc(err.message||err)}</span>`;
+    body.style.whiteSpace = '';
+  }
+}
+function copyBuilderTrans(){
+  if(!lastBuilderTrans){ toast('还没有译文'); return; }
+  navigator.clipboard.writeText(lastBuilderTrans)
+    .then(()=>toast('译文已复制'))
+    .catch(()=>{ fallbackCopy(lastBuilderTrans); toast('译文已复制'); });
 }
 
 /* ============================================================
@@ -1289,14 +1543,54 @@ function renderAlbum(){
     const cover = g.imageKeys&&g.imageKeys.length? imgGet(g.imageKeys[0]) : null;
     const gp = groupOf(g.groupId);
     const linked = g.promptId? promptOf(g.promptId) : null;
-    return `<div class="album-card" onclick="openGalleryEdit('${g.id}')">
-      <div class="album-cover">${cover?`<img src="${cover}" alt="" loading="lazy">`:'<div class="ph">🖼</div>'}<span class="count">${(g.imageKeys||[]).length}</span></div>
+    const n = (g.imageKeys||[]).length;
+    // 点击卡片 = 看图（可左右滑动）；右上角铅笔 = 编辑；长按 = 编辑
+    return `<div class="album-card" data-gid="${g.id}" onclick="onAlbumClick(event,'${g.id}')">
+      <div class="album-cover">
+        ${cover?`<img src="${cover}" alt="" loading="lazy">`:'<div class="ph">🖼</div>'}
+        ${n?`<span class="count">${n}</span>`:''}
+        <button class="album-edit" title="编辑图集" aria-label="编辑图集"
+                onclick="event.stopPropagation();openGalleryEdit('${g.id}')">${I.edit}</button>
+      </div>
       <div class="album-body">
         <div class="album-title">${esc(g.title)}</div>
         <div class="album-meta">${gp?esc(gp.name):'未分组'}${linked?' · 🔗 '+esc(linked.title):''}</div>
       </div>
     </div>`;
   }).join('');
+  bindAlbumLongPress();
+}
+
+/* 长按会先触发编辑；随后浏览器可能补发一次 click，用这个标志吞掉 */
+let suppressAlbumClick = false;
+function onAlbumClick(e, id){
+  if(e.target.closest('.album-edit')) return;
+  if(suppressAlbumClick){ suppressAlbumClick = false; return; }
+  openGalleryViewer(id, 0);
+}
+
+/* 相册卡片长按 → 编辑 */
+let albumLpTimer = null;
+function bindAlbumLongPress(){
+  $('albumGrid').querySelectorAll('.album-card').forEach(card=>{
+    card.addEventListener('pointerdown', ()=>{
+      clearTimeout(albumLpTimer);
+      albumLpTimer = setTimeout(()=>{
+        suppressAlbumClick = true;
+        openGalleryEdit(card.dataset.gid);
+        if(navigator.vibrate) try{ navigator.vibrate(10); }catch(_){}
+      }, 480);
+    });
+    const cancel = ()=>clearTimeout(albumLpTimer);
+    card.addEventListener('pointerup', cancel);
+    card.addEventListener('pointerleave', cancel);
+    card.addEventListener('pointercancel', cancel);
+    card.addEventListener('pointermove', e=>{
+      // 手指明显移动说明是在滑动，不是长按
+      if(Math.abs(e.movementX) > 4 || Math.abs(e.movementY) > 4) cancel();
+    });
+    card.addEventListener('contextmenu', e=>e.preventDefault());
+  });
 }
 
 let galleryEditingId = null, galleryImageKeys = [], galleryTags = [], galleryColorsPicked = null;
@@ -1735,6 +2029,55 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
 })();
 
 /* ============================================================
+ * 18.5 视口跟踪：让底部 Tab 栏始终贴住真实视口底部
+ * ------------------------------------------------------------------
+ * iOS Safari 的问题：软键盘弹出、顶部地址栏收起/展开时，
+ * 页面布局视口（innerHeight / dvh）和真实可视区会不同步，
+ * 绝对定位的底部元素就会"浮"到半空。
+ * visualViewport 给出的是真实可视区，用它换算底部偏移最可靠。
+ * ============================================================ */
+(function trackViewport(){
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+  if(!vv) return;
+
+  let raf = 0;
+  function update(){
+    raf = 0;
+    // offsetBottom：真实视口底部到布局视口底部的距离（键盘占高）
+    const offsetBottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+    root.style.setProperty('--vvb', offsetBottom.toFixed(1) + 'px');
+    root.style.setProperty('--vvh', vv.height.toFixed(1) + 'px');
+    // 键盘是否弹起：可视区明显矮于布局视口
+    const kb = offsetBottom > 120;
+    document.body.classList.toggle('kb-open', kb);
+    if(kb){
+      // 键盘弹起时收起 Tab 栏，避免挡住输入框（iOS 原生的做法）
+      dockEl.style.transform = 'translateX(-50%) translateY(140%)';
+      dockEl.style.opacity = '0';
+      dockEl.style.pointerEvents = 'none';
+    }else{
+      dockEl.style.transform = '';
+      dockEl.style.opacity = '';
+      dockEl.style.pointerEvents = '';
+    }
+  }
+  const schedule = ()=>{ if(!raf) raf = requestAnimationFrame(update); };
+  vv.addEventListener('resize', schedule, {passive:true});
+  vv.addEventListener('scroll', schedule, {passive:true});
+  window.addEventListener('orientationchange', schedule, {passive:true});
+  update();
+})();
+
+/* 输入框聚焦时，滚动到可见区域（配合键盘收起 Tab 栏） */
+document.addEventListener('focusin', e=>{
+  const el = e.target;
+  if(!el.matches('input, textarea, select')) return;
+  setTimeout(()=>{
+    try{ el.scrollIntoView({block:'center', behavior:'smooth'}); }catch(_){}
+  }, 280);
+});
+/* ============================================================
  * 19. 对外暴露（HTML 内联 onclick 依赖）
  * ============================================================ */
 Object.assign(window, {
@@ -1746,6 +2089,7 @@ Object.assign(window, {
   openVersion, closeVersion, rollbackVersion,
   openTrans, closeTrans, copyTrans, replaceByTrans,
   assemble, copyBuilder, saveBuilderToLib, clearBuilder,
+  translateBuilder, copyBuilderTrans,
   renderWorkbench, renderModelList, openModelModal, closeModelModal, onModelProviderChange,
   saveModelConfig, activateConfig, deleteConfig, testConfig,
   onTaskChange, pickTask, runWorkbench, sendFollowup, onReversePicked, copyResult, saveAsTemplate,
@@ -1755,5 +2099,8 @@ Object.assign(window, {
   reverseFromGallery, openGroupModal, closeGroupModal, editGroup, saveGroup, deleteGroup,
   openProfileEdit, closeProfileEdit, saveProfile,
   openExportModal, closeExport, doExport, exportJSON, importJSON, clearAll,
-  openMoreSheet, closeMoreSheet, openLightbox, removeTag, removeImage, onTagKey
+  openMoreSheet, closeMoreSheet, openLightbox, removeTag, removeImage, onTagKey,
+  /* 本轮新增 */
+  openDetail, closeDetail, openViewer, openViewerAt, openCardViewer, openGalleryViewer,
+  closeViewer, deleteVersion, clearVersions, onAlbumClick
 });

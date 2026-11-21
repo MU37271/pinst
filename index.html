@@ -52,12 +52,14 @@
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
+/* 兜底：任何横向溢出都不产生可滚动的空白条（页面本身只做纵向滚动） */
+html,body{max-width:100%;overflow-x:hidden}
 body{
   font-family:var(--font);color:var(--i1);line-height:1.5;letter-spacing:-.01em;
   background:#DEDEE3;
   background-image:radial-gradient(120% 80% at 50% -10%, #F4F4F6 0%, #DEDEE3 52%, #D2D2D8 100%);
   display:flex;align-items:center;justify-content:center;
-  min-height:100vh;min-height:100dvh;overflow:hidden;
+  min-height:100vh;min-height:100dvh;
 }
 button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
 input,select,textarea{font-family:inherit;font-size:15px;color:var(--i1)}
@@ -848,6 +850,25 @@ body.hoverable .act:hover{background:rgba(0,0,0,.055);color:var(--i1)}
 .grabber{display:none}
 .form-grid{display:flex;flex-direction:column;gap:0}
 .form-grid .full{grid-column:auto}
+/* ---------- Toast：居中浮层，任何长度都不撑宽页面 ---------- */
+.toast{
+  position:fixed;left:50%;bottom:calc(var(--tabbar-h) + 46px + var(--safe-b));
+  transform:translateX(-50%) translateY(10px);
+  width:max-content;max-width:calc(100vw - 48px);min-width:0;
+  box-sizing:border-box;white-space:normal;word-break:break-word;text-align:center;
+  background:rgba(14,14,16,.86);color:#fff;padding:11px 18px;border-radius:18px;
+  font-size:14px;font-weight:500;line-height:1.45;z-index:120;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity 240ms var(--ease-out), transform 320ms var(--ease-out), visibility 240ms;
+  -webkit-backdrop-filter:blur(16px) saturate(1.6);backdrop-filter:blur(16px) saturate(1.6);
+  border:1px solid rgba(255,255,255,.14);box-shadow:0 16px 40px -12px rgba(0,0,0,.55);
+}
+.toast.show{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);transform-origin:50% 100%}
+/* 桌面手机框内：宽度跟随手机而不是整个浏览器窗口 */
+@media (min-width:620px) and (min-height:700px){
+  .toast{max-width:372px;bottom:calc(var(--tabbar-h) + 54px)}
+}
+
 /* ---------- 全屏图片查看器（扑克牌堆） ---------- */
 .lightbox{
   position:fixed;inset:0;z-index:110;display:flex;flex-direction:column;

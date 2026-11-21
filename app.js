@@ -2403,15 +2403,14 @@ const viewportMetrics = {
     let sb = probe('bottom');
 
     /*
-     * 兜底：iOS 全面屏（屏幕高度 ≥ 800）实测为 0 时，用规格值。
-     * 非全面屏（SE 等）实测通常也是 0，此时保持 0 才对。
+     * 只用实测值，绝不凭空补数字。
+     *
+     * 之前的教训：曾按 iPhone 16 Pro 规格"兜底"成 59 / 34，
+     * 结果在 Safari 里（安全区本来就该是 0）多出 34px 空白带，
+     * 底部凭空出现一条白条。env() 在 Safari 返回 0、在主屏 App 返回 34，
+     * 两种场景本来就都正确，不需要人来"修正"。
      */
-    const screenH = Math.round(window.screen?.height || 0);
-    const isFullScreenIPhone = isIOS && screenH >= 800;
-    if(isFullScreenIPhone && st < 20) st = IOS_SPEC.safeTop;
-    if(isFullScreenIPhone && sb < 10) sb = IOS_SPEC.safeBottom;
-
-    // 桌面手机框模式用固定的小安全区
+    // 桌面手机框模式：框内没有真实安全区，给小一点即可
     if(document.body.classList.contains('desktop-frame')){
       st = 14; sb = 0;
     }
@@ -2454,7 +2453,7 @@ const viewportMetrics = {
     viewportMetrics.vvH = vv ? Math.round(vv.height) : 0;
     viewportMetrics.vvScale = vv ? Number(vv.scale.toFixed(2)) : 1;
     viewportMetrics.screenW = Math.round(window.screen?.width || 0);
-    viewportMetrics.screenH = screenH;
+    viewportMetrics.screenH = Math.round(window.screen?.height || 0);
     viewportMetrics.dpr = window.devicePixelRatio;
     viewportMetrics.safeT = Math.round(st);
     viewportMetrics.safeB = Math.round(sb);

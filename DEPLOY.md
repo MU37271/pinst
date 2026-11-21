@@ -238,3 +238,57 @@ git push -u origin main
 **Q：AI 工作台调用 API 会不会因为跨域失败**
 
 这是浏览器直连第三方 API 的通病，和部署方式无关。大部分 OpenAI 兼容端点支持浏览器直连；若某个服务商不支持，需要在它那边开启 CORS 或改用中转服务。
+
+---
+
+## 9. 已部署信息（本项目）
+
+| 项 | 值 |
+|---|---|
+| 仓库 | https://github.com/MU37271/pinst |
+| 线上地址 | https://MU37271.github.io/pinst/ |
+| Pages 分支 | `main` / 根目录 |
+
+### 每次更新代码后必做
+
+改动 `styles.css` / `app.js` / `index.html` 后，**顺手把 `sw.js` 第 10 行的版本号加一**：
+
+```js
+const CACHE = 'pinst-v2.1.0';   // → 改成 pinst-v2.1.1
+```
+
+不改版本号的话，已经打开过旧版的用户（包括你自己手机上装的主屏 App）会一直看到旧界面，因为 Service Worker 认为缓存仍然有效。
+
+### 国内网络下 push 失败怎么办
+
+如果 `git push` 报 `Recv failure: Connection was reset`，说明 `github.com:443` 被阻断。**打开 VPN 后重试即可**（本项目已验证有效）。
+
+备用方案：走 SSH 的 443 端口，它通常不会被阻断：
+
+```powershell
+# 1. 生成密钥（一次即可）
+ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519_pinst" -N '""' -C "pinst-deploy"
+
+# 2. 把 %USERPROFILE%\.ssh\id_ed25519_pinst.pub 的内容
+#    粘贴到 https://github.com/settings/keys → New SSH key
+
+# 3. 在 ~/.ssh/config 里写：
+#    Host github.com
+#        HostName ssh.github.com
+#        Port 443
+#        User git
+#        IdentityFile ~/.ssh/id_ed25519_pinst
+
+# 4. 改远程地址
+git remote set-url origin git@github.com:MU37271/pinst.git
+git push -u origin main
+```
+
+### 网站打开是旧版本？
+
+按这个顺序排查（部署本身通常没问题）：
+
+1. URL 后面加个随机参数，如 `?v=123`，绕开代理缓存
+2. Safari 下拉刷新两次
+3. 主屏 App：**删除图标 → Safari 重开网址 → 重新添加到主屏幕**
+4. 切换网络（如手机流量），绕过 VPN 的缓存层

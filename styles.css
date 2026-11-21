@@ -194,7 +194,12 @@ html, body {
   overflow: hidden;
   overscroll-behavior: none;
 }
-/* 用动态视口色，避免 PWA 启动瞬间露白 */
+/*
+ * 把背景色铺到 html / body / 外壳 / 分页 / 页面 每一层。
+ * 任何一层万一没盖满（iOS PWA 偶发），露出来的也是 App 自己的背景色，
+ * 而不是浏览器默认白底造成的"白条"。
+ */
+html { background: var(--bg); }
 body { background: var(--bg); }
 
 .app-shell {
@@ -339,30 +344,40 @@ body { background: var(--bg); }
    * 这样滚到底时最后一张卡片刚好停在 Tab 栏上方，屏幕底部不会出现空白带。
    */
   padding: calc(var(--safe-t) + var(--titlebar-h) + 64px) var(--content-pad)
-    calc(var(--tabbar-h) + 18px);
+    calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 22px);
   scrollbar-width: none;
 }
 .page > .page-spacer { height: 0; }
 
 /* ===================== 4. 液态玻璃 Tab 栏 ===================== */
 /*
- * 悬浮在底部、不与屏幕边缘相接（iOS 26 起的浮岛式 Tab 栏）。
+ * 结构：.tabbar-fixed（钉死在视口底部）> .tabdock（玻璃条本身）
  *
- * 用 fixed 而不是 absolute：
- *   absolute 依附外壳高度，一旦外壳与真实视口不同步（键盘、地址栏、
- *   dvh 抖动），Tab 栏就会离开底部。fixed 直接锚定视口，永远贴底。
- * 底部只留安全区 + 10px 间距 —— 真机上是 Home 指示条那一条，
- * 不再额外加 --vvb（fixed 的百分比/固定偏移本来就相对视口，
- * 再叠加会导致键盘弹起时偏移翻倍）。
+ * 为什么不让 .tabdock 自己 fixed：
+ *   它需要 bottom: 安全区 + 间距，而 iOS PWA 下 env(safe-area-inset-bottom)
+ *   可能取不到、或 visualViewport 尚未就绪，calc 就会算错，Tab 栏浮在半空
+ *   并在底部留下一条空白带（实体机反复出现的问题）。
+ *   改成"容器钉住 bottom:0，间距用容器内 padding-bottom 表现"：
+ *   padding 里的 env() 即使为 0，容器依然贴在屏幕最底边，绝不浮空。
  */
-.tabdock {
+.tabbar-fixed {
   position: fixed;
-  left: 50%;
-  bottom: calc(var(--safe-b) + 10px);
+  left: 0;
+  right: 0;
+  bottom: 0;                  /* 钉死底边：任何情况下都不浮空 */
   z-index: 40;
-  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  padding: 0 16px calc(env(safe-area-inset-bottom, 0px) + 8px);
+  pointer-events: none;       /* 只有胶囊自身可点击 */
   transition: transform var(--dur-mid) var(--ease-spring), opacity var(--dur-fast) var(--ease-ios);
-  width: min(400px, calc(100vw - 32px));
+}
+
+.tabdock {
+  position: relative;
+  pointer-events: auto;
+  width: min(400px, 100%);
   height: var(--tabbar-h);
   border-radius: var(--r-pill);
   isolation: isolate;
@@ -371,6 +386,8 @@ body { background: var(--bg); }
   align-items: stretch;
   padding: 0;
   gap: 0;
+  flex: 1 1 auto;
+  max-width: 400px;
 
   /* 玻璃本体 */
   background: var(--glass-tint-strong);
@@ -1476,18 +1493,16 @@ input[type="range"]::-webkit-slider-thumb {
    * 保留圆角 + 多层描边来营造"这是一台手机"的错觉即可。
    */
   /*
-   * 桌面端手机框内，fixed 会相对浏览器视口定位而溢出框外。
-   * 这里把 Tab 栏、遮罩等固定层改成 absolute，让它们以手机框为参照，
-   * 视觉上才像"框内的一部手机"。
+   * 桌面端手机框内，固定层要相对"手机框"而不是浏览器视口定位，
+   * 所以把 .tabbar-fixed 改成 absolute，钉在框的底边。
    */
-  .tabdock {
+  .tabbar-fixed {
     position: absolute;
-    bottom: calc(var(--safe-b) + 10px);
-    width: 360px;
+    padding: 0 16px 10px;
   }
+  .tabdock { width: 360px; max-width: 360px; }
   .topbar, .searchbar { position: absolute; }
   :root { --safe-t: 14px; }
-  .tabdock { width: 360px; }
   .toast { bottom: calc(var(--tabbar-h) + 26px); }
 }
 

@@ -13,7 +13,7 @@
 <meta name="description" content="提示词收藏、拼装与 AI 分析工作台 · 本地离线可用">
 <title>提示词工作台</title>
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="styles.css?v=240">
+<link rel="stylesheet" href="styles.css?v=250">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/icon-180.png">
 </head>
@@ -308,11 +308,17 @@
           <p style="font-size:12.5px;color:var(--ink-3);margin:0">所有提示词、相册图片与 API Key 仅保存在本机浏览器中，不会上传到其他服务器。换设备请先导出 JSON 备份。</p>
         </div>
       </div>
-      <div id="verLine" style="text-align:center;font-size:11.5px;color:var(--ink-4);padding:6px 0 4px">版本 2.4.0 · Liquid Glass</div>
+      <div id="verLine" style="text-align:center;font-size:11.5px;color:var(--ink-4);padding:6px 0 4px">版本 2.5.0 · Liquid Glass</div>
     </section>
   </div>
+</div>
 
-  <!-- ===== 液态玻璃 Tab（可拖动滑块 + 内容横滑联动） ===== -->
+<!--
+  Tab 栏放在 app-shell 外面，用一层 bottom:0 的固定容器锚住。
+  之前靠 calc(安全区) 算 bottom，iOS PWA 下安全区取不到就会浮在半空，
+  在底部留下一条空白带。独立容器直接钉住视口底边，不会浮起来。
+-->
+<div class="tabbar-fixed" id="tabbarFixed">
   <nav class="tabdock" id="tabdock" aria-label="主导航">
     <div class="tabpill" id="tabpill"></div>
     <button class="tab-item on" data-tab="0" aria-label="提示词库">
@@ -616,6 +622,6 @@
 <div class="lightbox hidden" id="lightbox" onclick="this.classList.add('hidden')"><img id="lightboxImg" alt=""></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="app.js?v=240"></script>
+<script src="app.js?v=250"></script>
 </body>
 </html>

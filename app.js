@@ -2257,31 +2257,32 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
 
     const kb = offsetBottom > 150;
     document.body.classList.toggle('kb-open', kb);
+    const barWrap = document.getElementById('tabbarFixed');
     if(kb){
       // 键盘弹起：外壳底边缩到键盘上沿（fixed inset 的 bottom 值）
       const shell = document.getElementById('appShell');
       if(shell) shell.style.bottom = offsetBottom.toFixed(0) + 'px';
-      // Tab 栏收起，避免挡住输入框（iOS 原生做法）
-      dockEl.style.transform = 'translateX(-50%) translateY(140%)';
-      dockEl.style.opacity = '0';
-      dockEl.style.pointerEvents = 'none';
+      // Tab 栏整条收起，避免挡住输入框（iOS 原生做法）
+      if(barWrap){
+        barWrap.style.transform = 'translateY(160%)';
+        barWrap.style.opacity = '0';
+        barWrap.style.pointerEvents = 'none';
+      }
     }else{
       // 键盘收起：交回 CSS 的 inset:0 —— 这是全屏贴底的关键
       const shell = document.getElementById('appShell');
       if(shell) shell.style.bottom = '';
-      dockEl.style.transform = '';
-      dockEl.style.opacity = '';
-      dockEl.style.pointerEvents = '';
+      if(barWrap){
+        barWrap.style.transform = '';
+        barWrap.style.opacity = '';
+        barWrap.style.pointerEvents = '';
+      }
     }
-
     /*
-     * Tab 栏底部定位：直接写 px，不依赖 CSS 的 calc(env())。
-     * 悬浮间距固定 8px，加上实测的安全区高度。
-     * 桌面手机框模式下已经用 CSS 固定为 absolute + bottom，这里跳过。
+     * Tab 栏的位置完全交给 CSS：.tabbar-fixed 用 bottom:0 钉住视口底边，
+     * 间距由容器 padding-bottom 里的 env(safe-area-inset-bottom) 表现。
+     * 这里不再写任何 bottom —— 之前正是 JS/CSS 各自算一遍导致浮空。
      */
-    if(!document.body.classList.contains('desktop-frame')){
-      dockEl.style.bottom = (safeAreaBottom() + 8).toFixed(0) + 'px';
-    }
   }
   const schedule = ()=>{ if(!raf) raf = requestAnimationFrame(update); };
   vv.addEventListener('resize', schedule, {passive:true});

@@ -2398,19 +2398,15 @@ const viewportMetrics = {
   function update(){
     raf = 0;
 
-    // ---- 实测安全区 ----
+    // ---- 安全区 ----
     let st = probe('top');
-    let sb = probe('bottom');
-
     /*
-     * 只用实测值，绝不凭空补数字。
-     *
-     * 之前的教训：曾按 iPhone 16 Pro 规格"兜底"成 59 / 34，
-     * 结果在 Safari 里（安全区本来就该是 0）多出 34px 空白带，
-     * 底部凭空出现一条白条。env() 在 Safari 返回 0、在主屏 App 返回 34，
-     * 两种场景本来就都正确，不需要人来"修正"。
+     * 底部安全区固定为 0（用户明确要求：主屏 App 里也不要给指示器留位）。
+     * 悬浮 Tab 栏靠自己的 bottom 偏移贴底，不再依赖 34pt。
      */
-    // 桌面手机框模式：框内没有真实安全区，给小一点即可
+    let sb = 0;
+
+    // 桌面手机框模式：框内没有真实安全区
     if(document.body.classList.contains('desktop-frame')){
       st = 14; sb = 0;
     }

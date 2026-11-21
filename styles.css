@@ -91,7 +91,7 @@
   --margin: 16px;         /* 安全边距 */
   --tabbar-h: 56px;       /* 底部 Tab 胶囊高度 */
   --tab-gap: 8px;         /* 胶囊与安全区之间的悬浮间距 */
-  --title-area: 48px;     /* 大标题占位 */
+  --title-area: 44px;     /* 大标题占位 */
 
   /* 兼容旧变量名 */
   --titlebar-h: var(--nav-h);
@@ -225,34 +225,21 @@ body { background: var(--bg); }
   /* 键盘弹起时 JS 会把 bottom 撑起来，让外壳缩到可视区 */
 }
 
-/* ---- 沉浸式状态栏 & 大标题栏 ---- */
+/* ---- 顶栏：无模糊，用与页面同色的实心底遮住滚动内容 ---- */
 .topbar {
   position: absolute;
   top: 0; left: 0; right: 0;
   z-index: 30;
   padding-top: var(--safe-t);
+  /* 覆盖「状态栏 + 导航栏 44 + 大标题 44」，内容从它下面滑过 */
+  padding-bottom: var(--title-area);
   pointer-events: none;
-  /* iOS 27：滚动时在顶栏统一出现模糊带（scroll edge effect） */
-  -webkit-backdrop-filter: blur(calc(var(--scroll) * 26px)) saturate(calc(140% + var(--scroll) * 60%));
-  backdrop-filter: blur(calc(var(--scroll) * 26px)) saturate(calc(140% + var(--scroll) * 60%));
-  transition: background-color .24s var(--ease-ios);
-}
-.topbar::before {
-  /* 模糊带的渐隐边缘：模糊本身无遮罩，用一层渐变把底部边缘化开 */
-  content: "";
-  position: absolute; inset: 0; bottom: -28px;
-  pointer-events: none;
-  background: linear-gradient(to bottom,
-      rgba(0, 0, 0, .045) 0%,
-      rgba(0, 0, 0, calc(.03 * (1 - var(--scroll)))) 60%,
-      transparent 100%);
-  opacity: calc(.25 + var(--scroll) * .75);
-}
-@media (prefers-color-scheme: dark) {
-  .topbar::before {
-    background: linear-gradient(to bottom,
-        rgba(255, 255, 255, .06) 0%, rgba(255, 255, 255, .02) 55%, transparent 100%);
-  }
+  /* 按要求取消模糊：不设 backdrop-filter，纯同色实心底 */
+  background: var(--bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 0;
+  box-shadow: none;
 }
 
 .topbar-inner {
@@ -270,6 +257,7 @@ body { background: var(--bg); }
   left: var(--margin); right: var(--margin);
   top: calc(var(--safe-t) + var(--nav-h));
   height: var(--title-area);
+  z-index: 31;              /* 压在顶栏实心底之上 */
   /* h1 默认有 0.67em 外边距，会把标题往下顶 23px、压到卡片上 */
   margin: 0;
   display: flex;
@@ -348,14 +336,14 @@ body { background: var(--bg); }
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   /*
-   * 垂直结构：
-   *   顶部留白 = 状态栏 59 + 导航栏 44 + 大标题 48 = 151pt
-   *   底部留白 = Tab 栏 56 + 安全区 34 + 8 = 98pt
-   * Tab 栏是贴底的实心栏，背景铺满含安全区，所以底部不会出现任何空白条。
+   * 垂直结构（尽量把有效内容区拉长）：
+   *   顶部 = 状态栏 + 导航栏 44 + 大标题 44 + 2 = 90 + 状态栏
+   *   底部 = Tab 栏 56 + 悬浮 8 + 4 = 68（不再叠加安全区）
+   * 滚到底时最后一张卡片恰好停在悬浮栏上方，屏幕底部不留空白带。
    */
-  padding: calc(var(--safe-t) + var(--nav-h) + var(--title-area) + 4px)
+  padding: calc(var(--safe-t) + var(--nav-h) + var(--title-area) + 2px)
            var(--margin)
-           calc(var(--tabbar-h) + var(--safe-b) + 12px);
+           calc(var(--tabbar-h) + 8px + 4px);
   scrollbar-width: none;
 }
 .page > .page-spacer { height: 0; }
@@ -375,49 +363,62 @@ body { background: var(--bg); }
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;                  /* 钉死底边：任何情况下都不浮空 */
+  bottom: 8px;                /* 悬浮：离页面底边 8px，不占安全区 */
   z-index: 40;
-  display: block;
-  /* 安全区用 padding 吃掉，背景铺满整条（含安全区），所以不会露白 */
-  padding-bottom: var(--safe-b);
-  background: var(--glass-tint-strong);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  border-top: .5px solid var(--sep);
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  padding: 0 var(--margin);
+  pointer-events: none;       /* 只有胶囊自身可点击 */
+  background: none;
+  border: 0;
+  box-shadow: none;
   transition: transform var(--dur-mid) var(--ease-spring), opacity var(--dur-fast) var(--ease-ios);
   touch-action: none;
-  /* 顶部一道极淡的投影，与内容分层 */
-  box-shadow: 0 -6px 24px -18px rgba(0, 0, 0, .45);
 }
 
+/* 悬浮液态玻璃胶囊 */
 .tabdock {
   position: relative;
-  width: 100%;
+  pointer-events: auto;
+  width: min(400px, 100%);
   height: var(--tabbar-h);
+  border-radius: var(--r-pill);
   isolation: isolate;
   touch-action: none;
   display: flex;
   align-items: stretch;
-  padding: 0 6px;
+  padding: 0 4px;
   gap: 0;
-  background: transparent;
-  border-radius: 0;
-  box-shadow: none;
+  background: var(--glass-tint-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
+  border: .5px solid var(--glass-edge);
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 .5px 0 var(--glass-rim),
+    inset 0 -1px 1px rgba(255, 255, 255, .22);
 }
-/* 选中指示器：克制的高亮，不做大圆角块 */
+/* 选中指示器：胶囊内的高光块 */
 .tabpill {
   position: absolute;
-  top: 8px; bottom: 8px; left: 0;
-  border-radius: 10px;
+  top: 6px; bottom: 6px; left: 0;
+  border-radius: var(--r-pill);
   pointer-events: none;
   z-index: 0;
   width: 0;
-  background: var(--fill-1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .28));
+  box-shadow:
+    inset 0 .5px 0 rgba(255, 255, 255, .9),
+    0 2px 8px -3px rgba(0, 0, 0, .28);
   transition: transform var(--dur-slow) var(--ease-spring), width var(--dur-slow) var(--ease-spring);
 }
 .tabdock.dragging .tabpill { transition: width var(--dur-fast) var(--ease-out); }
 @media (prefers-color-scheme: dark) {
-  .tabpill { background: rgba(255, 255, 255, .07); }
+  .tabpill {
+    background: linear-gradient(180deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, .08));
+    box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .4), 0 2px 8px -3px rgba(0, 0, 0, .6);
+  }
 }
 .tab-item {
   position: relative;

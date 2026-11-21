@@ -2434,7 +2434,7 @@ const viewportMetrics = {
     if(kb){
       if(shell) shell.style.bottom = offsetBottom.toFixed(0) + 'px';
       if(barWrap){
-        barWrap.style.transform = 'translateY(160%)';
+        barWrap.style.transform = 'translateY(100%)';
         barWrap.style.opacity = '0';
         barWrap.style.pointerEvents = 'none';
       }

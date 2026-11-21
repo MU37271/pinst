@@ -348,15 +348,14 @@ body { background: var(--bg); }
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   /*
-   * 垂直结构严格按 iPhone 16 Pro 规格：
-   *   顶部留白 = 状态栏 59 + 导航栏 44 + 大标题 48        = 151pt
-   *   底部留白 = 指示器 34 + Tab 56 + 悬浮 8 + 呼吸 12     = 110pt
-   * 这样内容区正好落在中间，滚到底时最后一张卡片停在 Tab 胶囊上方，
-   * 屏幕最底部不会出现任何空白带。
+   * 垂直结构：
+   *   顶部留白 = 状态栏 59 + 导航栏 44 + 大标题 48 = 151pt
+   *   底部留白 = Tab 栏 56 + 安全区 34 + 8 = 98pt
+   * Tab 栏是贴底的实心栏，背景铺满含安全区，所以底部不会出现任何空白条。
    */
   padding: calc(var(--safe-t) + var(--nav-h) + var(--title-area) + 4px)
            var(--margin)
-           calc(var(--safe-b) + var(--tabbar-h) + var(--tab-gap) + 12px);
+           calc(var(--tabbar-h) + var(--safe-b) + 12px);
   scrollbar-width: none;
 }
 .page > .page-spacer { height: 0; }
@@ -378,76 +377,50 @@ body { background: var(--bg); }
   right: 0;
   bottom: 0;                  /* 钉死底边：任何情况下都不浮空 */
   z-index: 40;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  /* 底部 = 指示器安全区 34 + 胶囊悬浮间距 8；左右 = 安全边距 16 */
-  padding: 0 var(--margin) calc(var(--safe-b) + var(--tab-gap));
-  pointer-events: none;       /* 只有胶囊自身可点击 */
+  display: block;
+  /* 安全区用 padding 吃掉，背景铺满整条（含安全区），所以不会露白 */
+  padding-bottom: var(--safe-b);
+  background: var(--glass-tint-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border-top: .5px solid var(--sep);
   transition: transform var(--dur-mid) var(--ease-spring), opacity var(--dur-fast) var(--ease-ios);
   touch-action: none;
-}
-/* 兜底：把安全区以下也刷成 App 背景，避免任何情况下露白 */
-.tabbar-fixed::after {
-  content: "";
-  position: absolute;
-  left: 0; right: 0;
-  top: 100%;
-  height: 200px;
-  background: var(--bg);
-  pointer-events: none;
-  z-index: -1;
+  /* 顶部一道极淡的投影，与内容分层 */
+  box-shadow: 0 -6px 24px -18px rgba(0, 0, 0, .45);
 }
 
 .tabdock {
   position: relative;
-  pointer-events: auto;
-  width: min(400px, 100%);
+  width: 100%;
   height: var(--tabbar-h);
-  border-radius: var(--r-pill);
   isolation: isolate;
   touch-action: none;
   display: flex;
   align-items: stretch;
-  padding: 0;
+  padding: 0 6px;
   gap: 0;
-  flex: 1 1 auto;
-  max-width: 400px;
-
-  /* 玻璃本体 */
-  background: var(--glass-tint-strong);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(1.04);
-  box-shadow:
-    var(--glass-shadow),
-    inset 0 .5px 0 var(--glass-rim),
-    inset 0 -1px 1px rgba(255, 255, 255, .25),
-    inset 1px 0 0 var(--glass-edge),
-    inset -1px 0 0 var(--glass-edge),
-    0 0 0 .5px var(--glass-darkline);
-  transition: transform var(--dur-mid) var(--ease-spring),
-    box-shadow var(--dur-fast);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
-/* 液态滑块：跟随横滑进度、拖动时被"拉伸" */
+/* 选中指示器：栏内的高亮块，不再是悬浮胶囊 */
 .tabpill {
   position: absolute;
-  top: 6px; bottom: 6px; left: 0;
-  border-radius: var(--r-pill);
+  top: 7px; bottom: 7px; left: 0;
+  border-radius: 14px;
   pointer-events: none;
   z-index: 0;
   width: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, .5), rgba(255, 255, 255, .26));
-  box-shadow:
-    inset 0 .5px 0 rgba(255, 255, 255, .95),
-    inset 0 -1px 1px rgba(255, 255, 255, .4),
-    0 2px 8px -3px rgba(0, 0, 0, .3);
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 .5px var(--sep);
   transition: transform var(--dur-slow) var(--ease-spring), width var(--dur-slow) var(--ease-spring);
 }
 .tabdock.dragging .tabpill { transition: width var(--dur-fast) var(--ease-out); }
 @media (prefers-color-scheme: dark) {
   .tabpill {
-    background: linear-gradient(180deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, .08));
-    box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .45), 0 2px 8px -3px rgba(0, 0, 0, .6);
+    background: rgba(255, 255, 255, .12);
+    box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .08);
   }
 }
 .tab-item {
@@ -1523,11 +1496,11 @@ input[type="range"]::-webkit-slider-thumb {
    */
   .tabbar-fixed {
     position: absolute;
-    padding: 0 16px 10px;
+    padding-bottom: 8px;   /* 框内没有 Home 指示条，留一点呼吸即可 */
+    border-radius: 0 0 54px 54px;
   }
-  .tabdock { width: 360px; max-width: 360px; }
   .topbar, .searchbar { position: absolute; }
-  :root { --safe-t: 14px; }
+  :root { --safe-t: 14px; --safe-b: 0px; }
   .toast { bottom: calc(var(--tabbar-h) + 26px); }
 }
 

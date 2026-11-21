@@ -1,99 +1,72 @@
-/* ==========================================================================
- *  Service Worker · 提示词工作台
- *  ------------------------------------------------------------------------
- *  策略（v2.4.0 起）：
- *   - 应用文件（HTML/CSS/JS/清单）：**网络优先**。联网时永远拿最新代码，
- *     彻底避免"改了代码但用户还看旧界面"的缓存问题；断网时回退缓存。
- *   - 图标等静态资源：缓存优先，后台更新（几乎不变，省流量）。
- *   - AI 接口：永不拦截、永不缓存。
- *  升级版本：修改 CACHE 常量即可，会清掉旧缓存。
- * ========================================================================== */
-const CACHE = 'pinst-v3.3.0';
-
-/* 需要"永远拿最新"的应用文件 */
-const APP_FILES = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest'];
-
-/* 可长期缓存的静态资源 */
-const STATIC_FILES = [
-  './assets/vendor/gsap.min.js',
+/* pinst Service Worker · 外壳离线可用
+   - 页面(index.html)走「网络优先，失败回退缓存」：保证更新后立即拿到新版
+   - 静态资源(图标/GSAP)走「缓存优先」：二次打开秒开
+   - 模型 API 等跨域请求一律直连，不缓存 */
+const VERSION = 'v5';
+const CACHE = 'pinst-shell-' + VERSION;
+const SHELL = [
+  './',
+  './index.html',
+  './vendor/gsap.min.js',
+  './manifest.webmanifest',
   './assets/icon.svg',
+  './assets/icon-180.png',
   './assets/icon-192.png',
   './assets/icon-512.png',
   './assets/icon-maskable-512.png',
-  './assets/icon-180.png'
+  './assets/favicon-32.png'
 ];
 
-const SHELL = [...APP_FILES, ...STATIC_FILES];
-
-self.addEventListener('install', e=>{
+self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c=>Promise.allSettled(SHELL.map(u=>c.add(new Request(u, {cache:'reload'})))))
-      .then(()=>self.skipWaiting())
+      .then(c => c.addAll(SHELL).catch(() => {}))   // 任一文件缺失也不阻塞安装
+      .then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener('activate', e=>{
+self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-      .then(()=>self.clients.claim())
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener('fetch', e=>{
+// 页面可发送 {type:'skip-waiting'} 主动更新
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'skip-waiting') self.skipWaiting();
+});
+
+self.addEventListener('fetch', e => {
   const req = e.request;
-  if(req.method !== 'GET') return;
-
+  if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (url.origin !== location.origin) return;                  // AI 接口直连
 
-  // 跨域 / AI 接口：完全不碰
-  if(url.hostname !== location.hostname) return;
-  if(url.pathname.includes('/chat/completions') || url.pathname.includes(':generateContent')) return;
-
-  const isAppFile = req.mode === 'navigate'
-    || /\.(html|css|js|webmanifest)$/.test(url.pathname)
-    || url.pathname.endsWith('/');
-
-  // ---- 应用文件：网络优先，失败回退缓存 ----
-  if(isAppFile){
+  // 导航请求：网络优先，离线时回退到缓存的外壳
+  if (req.mode === 'navigate' || req.destination === 'document') {
     e.respondWith(
-      fetch(new Request(req, {cache:'reload'}))
-        .then(res=>{
-          if(res && res.ok){
-            const copy = res.clone();
-            caches.open(CACHE).then(c=>c.put(req, copy)).catch(()=>{});
-          }
-          return res;
-        })
-        .catch(async ()=>{
-          const hit = await caches.match(req);
-          if(hit) return hit;
-          if(req.mode === 'navigate'){
-            return (await caches.match('./index.html')) || (await caches.match('./'));
-          }
-          return Response.error();
-        })
+      fetch(req).then(res => {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => {});
+        return res;
+      }).catch(() => caches.match('./index.html').then(hit => hit || caches.match('./')))
     );
     return;
   }
 
-  // ---- 静态资源：缓存优先 ----
+  // 静态资源：缓存优先，后台顺带更新
   e.respondWith(
-    caches.match(req).then(hit=>{
-      if(hit) return hit;
-      return fetch(req).then(res=>{
-        if(res && res.ok){
+    caches.match(req).then(hit => {
+      const net = fetch(req).then(res => {
+        if (res && res.ok) {
           const copy = res.clone();
-          caches.open(CACHE).then(c=>c.put(req, copy)).catch(()=>{});
+          caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
         }
         return res;
-      });
+      }).catch(() => hit);
+      return hit || net;
     })
   );
-});
-
-/* 允许页面主动要求跳过等待，立即启用新版本 */
-self.addEventListener('message', e=>{
-  if(e.data === 'SKIP_WAITING') self.skipWaiting();
 });

@@ -1,10 +1,13 @@
-# Local test & debug artifacts (not deployed)
-_lab/
+# 本地预览截图（仅开发时参考，不进仓库）
+preview-*.png
 
-# OS / editor
+# 改造前的备份文件
+index.before-ios27.html
+index.orig.html
+
+# 系统 / 编辑器杂项
 .DS_Store
 Thumbs.db
-desktop.ini
-.vscode/
 .idea/
+.vscode/
 *.log

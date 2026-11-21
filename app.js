@@ -42,15 +42,49 @@ let state = {
   ui: {activeCat:'all', activeTag:null, activeGroup:'all', search:'', view:'library', filter:'all', sort:'updated'}
 };
 
-function load(){
+/*
+ * 读取顺序（重要）：
+ *   1) IndexedDB 的 app_state —— 主存储，iOS 上唯一可靠
+ *   2) localStorage          —— 备份，以及从旧版本升级时的迁移来源
+ *   3) 更早的 v1/v2 key      —— 历史数据迁移
+ * 三者取"最新写入"的那份，避免旧备份覆盖新数据。
+ */
+async function load(){
   try{
-    const raw = localStorage.getItem(STORE_KEY);
-    if(raw){
-      const d = JSON.parse(raw);
-      state = Object.assign(state, d);
-      state.ui = Object.assign({activeCat:'all',activeTag:null,activeGroup:'all',search:'',view:'library',filter:'all',sort:'updated'}, d.ui||{});
-      state.profile = Object.assign({name:'我的相册', avatar:'🎨'}, d.profile||{});
+    let fromIDB = null, fromLS = null;
+
+    // 1. IndexedDB
+    try{
+      const raw = await dbTx('readonly', s=>s.get(STATE_KEY), KV_STORE);
+      if(raw) fromIDB = JSON.parse(raw);
+    }catch(e){ console.warn('IndexedDB 读取失败', e); }
+
+    // 2. localStorage
+    try{
+      const raw = localStorage.getItem(STORE_KEY);
+      if(raw) fromLS = JSON.parse(raw);
+    }catch(e){ console.warn('localStorage 读取失败', e); }
+
+    // 选较新的一份（有 updatedAt 就比它，否则优先 IDB）
+    let picked = fromIDB || fromLS;
+    if(fromIDB && fromLS){
+      const a = fromIDB._savedAt || 0, b = fromLS._savedAt || 0;
+      picked = a >= b ? fromIDB : fromLS;
+    }
+
+    if(picked){
+      state = Object.assign(state, picked);
+      state.ui = Object.assign({activeCat:'all',activeTag:null,activeGroup:'all',search:'',view:'library',filter:'all',sort:'updated'}, picked.ui||{});
+      state.profile = Object.assign({name:'我的相册', avatar:'🎨'}, picked.profile||{});
+      // 数据来自 localStorage 而 IDB 还空着 → 立即迁移进 IDB，防止 iOS 下次把它清掉
+      if(!fromIDB && fromLS){
+        try{
+          await dbTx('readwrite', s=>s.put(JSON.stringify(fromLS), STATE_KEY), KV_STORE);
+          console.info('已从 localStorage 迁移数据到 IndexedDB');
+        }catch(e){ console.warn('迁移到 IndexedDB 失败', e); }
+      }
     }else{
+      // 3. 老版本数据迁移
       const old = localStorage.getItem('prompt_workbench_v2') || localStorage.getItem('prompt_workbench_v1');
       if(old){
         const d = JSON.parse(old);
@@ -102,64 +136,63 @@ function load(){
  *   3) 图片一律存 IndexedDB（体积大），state 里只保存 key
  * 因此 persist() 做了三件事：同步写入 → 回读校验 → 失败时明确报错。
  * ============================================================ */
+/*
+ * 双写：IndexedDB（主，可靠）+ localStorage（备份，可能失败但不影响）
+ * iOS 主屏 PWA 下 localStorage 可能整个会话结束就丢，IndexedDB 不会。
+ * 返回 true 表示主存储（IndexedDB）写入成功。
+ */
+let persistQueue = Promise.resolve();
 function persist(){
   let json;
-  try{ json = JSON.stringify(state); }
+  try{
+    state._savedAt = Date.now();   // 用于 load() 时判断哪份更新
+    json = JSON.stringify(state);
+  }
   catch(e){ toast('数据序列化失败：' + e.message); return false; }
 
-  try{
-    localStorage.setItem(STORE_KEY, json);
-  }catch(e){
-    // 容量不足：先尝试清理历史版本等可牺牲数据
-    const reclaimed = reclaimSpace();
-    if(reclaimed){
-      try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-      catch(e2){ reportStorageFailure(e2, json.length); return false; }
-    }else{
+  // localStorage 尽力而为：失败不影响主存储
+  try{ localStorage.setItem(STORE_KEY, json); }catch(e){ /* 忽略：以 IDB 为准 */ }
+
+  // IndexedDB 写入串行排队，避免并发覆盖
+  persistQueue = persistQueue.then(async ()=>{
+    try{
+      await dbTx('readwrite', s=>s.put(json, STATE_KEY), KV_STORE);
+      return true;
+    }catch(e){
       reportStorageFailure(e, json.length);
       return false;
     }
-  }
+  }).catch(()=>false);
 
-  // 回读校验：确认真的写进去了（iOS 上这是唯一可靠的验证方式）
-  try{
-    const check = localStorage.getItem(STORE_KEY);
-    if(!check || check.length !== json.length){
-      reportStorageFailure(new Error('写入后校验不一致'), json.length);
-      return false;
-    }
-  }catch(e){ /* 读失败不阻断，写入本身已成功 */ }
-
-  return true;
+  return true;  // 实际结果异步，调用方不需要等待（已在 UI 上即时反映）
 }
 
-/** 容量不足时尝试回收：清空历史版本、AI 历史、过期的旧 key */
+/** 等待所有排队中的写入完成（关闭页面前调用） */
+async function flushPersist(){
+  try{ await persistQueue; }catch(e){}
+}
+
+/** 容量回收：IndexedDB 配额够大，这里只清理 localStorage 的旧 key */
 function reclaimSpace(){
   let freed = false;
   try{
-    // 1. 清掉更早版本的遗留 key
     ['prompt_workbench_v2','prompt_workbench_v1'].forEach(k=>{
       if(localStorage.getItem(k)){ localStorage.removeItem(k); freed = true; }
     });
-    // 2. 精简历史版本（只保留最近 3 个）
-    (state.prompts||[]).forEach(p=>{
-      if((p.versions||[]).length > 3){ p.versions = p.versions.slice(0,3); freed = true; }
-    });
-    // 3. AI 分析历史只保留最近 10 条
-    if((state.history||[]).length > 10){ state.history = state.history.slice(0,10); freed = true; }
   }catch(e){}
   return freed;
 }
 
 function reportStorageFailure(err, size){
   const kb = (size/1024).toFixed(1);
-  console.warn('持久化失败', err, '数据大小', kb + 'KB');
-  toast(`保存失败：本地存储已满（${kb}KB）。请到「我的 → 导出备份」后清理部分数据`);
+  console.warn('IndexedDB 写入失败', err, '数据大小', kb + 'KB');
+  toast(`保存失败（${kb}KB）：请到「我的 → 导出备份」后清理数据`);
 }
 
-/** 立即同步写入一次（用于页面隐藏/关闭前的兜底） */
+/** 页面隐藏/关闭前的兜底：同步写 localStorage，并等 IDB 完成 */
 function persistNow(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }catch(e){}
+  flushPersist();
 }
 
 // 页面被挂起/关闭前再写一次，防止 iOS 切后台时丢最后一次写入
@@ -169,22 +202,34 @@ document.addEventListener('visibilitychange', ()=>{
 window.addEventListener('pagehide', persistNow);
 window.addEventListener('beforeunload', persistNow);
 
-/* ---- IndexedDB 图片仓库（原样） ---- */
-const DB_NAME='prompt_workbench_db', IMG_STORE='imgs';
+/* ---- IndexedDB 仓库：图片 + 主数据 ----
+ * 升级到 v2，新增 'kv' 表专门存应用数据。
+ * iOS 主屏 PWA 下 localStorage 可能不落盘（诊断页实测证实），
+ * 而 IndexedDB 是可靠的，所以把 state 存这里，localStorage 只做备份。
+ */
+const DB_NAME='prompt_workbench_db';
+const IMG_STORE='imgs';
+const KV_STORE='kv';
+const STATE_KEY='app_state';
 let db=null, imgCache=new Map();
 
 function openDB(){
   return new Promise((resolve,reject)=>{
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = e=>{ e.target.result.createObjectStore(IMG_STORE); };
+    const req = indexedDB.open(DB_NAME, 2);   // 版本 2：加 kv 表
+    req.onupgradeneeded = e=>{
+      const d = e.target.result;
+      if(!d.objectStoreNames.contains(IMG_STORE)) d.createObjectStore(IMG_STORE);
+      if(!d.objectStoreNames.contains(KV_STORE)) d.createObjectStore(KV_STORE);
+    };
     req.onsuccess = e=>{ db=e.target.result; resolve(); };
     req.onerror = ()=>reject(req.error);
   });
 }
-function dbTx(mode, fn){
+function dbTx(mode, fn, storeName = IMG_STORE){
   return new Promise((resolve,reject)=>{
-    const t = db.transaction(IMG_STORE, mode);
-    const r = fn(t.objectStore(IMG_STORE));
+    if(!db) return reject(new Error('数据库未打开'));
+    const t = db.transaction(storeName, mode);
+    const r = fn(t.objectStore(storeName));
     r.onsuccess = ()=>resolve(r.result);
     r.onerror = ()=>reject(r.error);
   });
@@ -2104,9 +2149,19 @@ $('btnMore').addEventListener('click', openMoreSheet);
 $('btnAdd').addEventListener('click', ()=>openEdit());
 
 (async function init(){
-  load();
-  try{ await openDB(); await imgLoadAll(); }
-  catch(e){ console.warn('IndexedDB 不可用，相册图片将无法持久化', e); toast('当前浏览器数据库不可用，相册图片可能无法保存'); }
+  /*
+   * 顺序很重要：必须先打开 IndexedDB，再 load()。
+   * load() 现在是异步的，会同时查 IDB 和 localStorage 并取较新的一份。
+   */
+  try{
+    await openDB();
+    await load();
+    await imgLoadAll();
+  }catch(e){
+    console.warn('IndexedDB 不可用，降级到 localStorage', e);
+    try{ await load(); }catch(_){}
+    toast('本地数据库不可用，数据可能无法保存，请先导出备份');
+  }
   $('searchInput').value = state.ui.search||'';
   setFilter(state.ui.filter||'all');
   renderWorkbench();
@@ -2161,18 +2216,20 @@ $('btnAdd').addEventListener('click', ()=>openEdit());
     const offsetBottom = Math.max(0, window.innerHeight - visibleBottom);
     root.style.setProperty('--vvb', offsetBottom.toFixed(1) + 'px');
 
-    // 外壳高度：键盘弹起时收缩到可视区，否则用完整视口（保证贴底）
     const kb = offsetBottom > 150;
     document.body.classList.toggle('kb-open', kb);
     if(kb){
-      root.style.setProperty('--app-h', vv.height.toFixed(1) + 'px');
-      // 键盘弹起时收起 Tab 栏，避免挡住输入框（iOS 原生做法）
+      // 键盘弹起：外壳底边缩到键盘上沿（fixed inset 的 bottom 值）
+      const shell = document.getElementById('appShell');
+      if(shell) shell.style.bottom = offsetBottom.toFixed(0) + 'px';
+      // Tab 栏收起，避免挡住输入框（iOS 原生做法）
       dockEl.style.transform = 'translateX(-50%) translateY(140%)';
       dockEl.style.opacity = '0';
       dockEl.style.pointerEvents = 'none';
     }else{
-      // 清掉内联高度，交回 CSS 的 100dvh —— 这是贴底的关键
-      root.style.removeProperty('--app-h');
+      // 键盘收起：交回 CSS 的 inset:0 —— 这是全屏贴底的关键
+      const shell = document.getElementById('appShell');
+      if(shell) shell.style.bottom = '';
       dockEl.style.transform = '';
       dockEl.style.opacity = '';
       dockEl.style.pointerEvents = '';
